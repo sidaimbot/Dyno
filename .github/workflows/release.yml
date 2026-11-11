@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -23,7 +24,10 @@ jobs:
           python-version: '3.12'
 
       - name: Require the tag to match package.json
-        run: node -e "const v=require('./package.json').version; const t=process.env.GITHUB_REF_NAME.replace(/^v/,''); if(v!==t){ console.error('Tag v'+t+' does not match package.json '+v); process.exit(1); }"
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          node -e "const v=require('./package.json').version; const t=process.env.GITHUB_REF_NAME.replace(/^v/,''); if(v!==t){ console.error('Tag v'+t+' does not match package.json '+v); process.exit(1); }"
 
       - name: Install npm dependencies
         run: npm install
@@ -33,10 +37,6 @@ jobs:
           py -m pip install --upgrade pip
           py -m pip install winsdk pyinstaller
           npm run build:helper
-
-      - name: Delete existing release (if any)
-        run: |
-          gh release delete v${{ package.json.version }} --yes 2>/dev/null || true
 
       - name: Build the NSIS installer and publish the GitHub Release
         env:
