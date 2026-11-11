@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dyno</title><link rel="stylesheet" href="island.css">
+</head>
+<body>
+<main id="stage">
+  <section id="island" class="island idle entering" aria-live="polite">
+
+    <div id="idleView" class="view idle-view" aria-label="Dyno is idle">
+      <span class="eye"></span><span class="eye"></span>
+    </div>
+
+    <div id="compactView" class="view compact-view">
+      <span id="compactIcon" class="compact-icon" aria-hidden="true">✦</span>
+      <img id="compactArt" class="compact-art" alt="">
+      <div id="compactCopy" class="compact-copy">
+        <strong id="compactTitle">Dyno</strong>
+        <small id="compactSubtitle">Ready</small>
+      </div>
+      <div id="compactBar" class="compact-bar" hidden><i id="compactFill"></i></div>
+      <div id="compactRight" class="compact-right"></div>
+    </div>
+
+    <div id="expandedView" class="view expanded-view">
+      <img id="bigArt" class="card-art" alt="">
+      <span id="artPlaceholder" class="card-art-ph">♪</span>
+      <i class="card-art-fade" aria-hidden="true"></i>
+
+      <header class="card-head">
+        <div class="head-left">
+          <button class="net-pill" id="netPill" aria-label="Wi-Fi and Bluetooth">
+            <svg class="net-wifi" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 8.4a14.2 14.2 0 0 1 19.2 0"/><path d="M5.7 12.1a9.4 9.4 0 0 1 12.6 0"/><path d="M9 15.8a4.7 4.7 0 0 1 6 0"/><circle cx="12" cy="19.6" r="1.3"/></svg>
+            <svg class="net-bt" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.6 17.5 17.4 12 22V2l5.5 4.6L6.5 17.4"/></svg>
+          </button>
+          <div class="head-date" id="headDate">MON 09 NOV</div>
+        </div>
+        <div class="head-eyes" aria-hidden="true">
+          <span class="eye"></span><span class="eye"></span>
+        </div>
+        <div class="head-right">
+          <span class="battery-pill" id="headBattery" hidden>
+            <svg class="bolt" id="headBatteryBolt" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M13.6 1.6 5.2 13.1h4.9L9.4 22.4l8.6-12.1h-5z"/></svg>
+            <svg class="batt" viewBox="0 0 26.4 13.6" aria-hidden="true">
+              <rect class="shell" x=".7" y=".7" width="20.4" height="12.2" rx="3.8"/>
+              <rect class="fill" id="headBatteryFill" x="2.5" y="2.5" width="16.8" height="8.6" rx="2.4"/>
+              <rect class="tip" x="22.1" y="4.7" width="2" height="4.2" rx="1"/>
+            </svg>
+            <b id="headBatteryPct">—</b>
+            <span id="headBatteryTime"></span>
+          </span>
+          <span class="head-clock" id="headClock">--:--</span>
+          <button class="menu-dot" id="menuToggle" data-tip="Menu" aria-label="App menu"><i class="dot"></i><span>•••</span></button>
+        </div>
+      </header>
+
+      <div class="card-body">
+
+        <!-- home ------------------------------------------------------- -->
+        <section class="view-pane home-pane" data-view="home">
+          <div class="home-top">
+            <b id="homeTime">--:--</b>
+            <span id="homeDate"></span>
+          </div>
+          <div class="home-now">
+            <img id="homeArt" class="home-art" alt="" hidden>
+            <div class="home-now-copy">
+              <small>NOW PLAYING</small>
+              <b id="homeTitle">Nothing playing</b>
+              <span id="homeArtist">Open a player to begin</span>
+            </div>
+            <button class="round-btn" id="homePlay" aria-label="Play or pause">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path id="homePlayPath" d="M8 5l11 7-11 7z"/></svg>
+            </button>
+          </div>
+          <div class="home-chips">
+            <button class="chip" data-goto="calendar">Today</button>
+            <button class="chip" data-goto="timer">Start focus</button>
+            <button class="chip" data-goto="alerts">Notifications</button>
+          </div>
+        </section>
+
+        <!-- now playing ------------------------------------------------ -->
+        <section class="view-pane media-pane" data-view="music">
+          <div class="media-meta">
+            <b id="mediaTitle">Nothing playing</b><span class="dotsep">·</span><span id="mediaArtist"></span>
+          </div>
+          <div class="media-lyrics">
+            <p id="bigLyric">Open a player to begin</p>
+            <p id="nextLyric"></p>
+          </div>
+          <div class="timeline">
+            <span id="tElapsed">0:00</span>
+            <input id="seek" class="seek" type="range" min="0" max="100" value="0" aria-label="Seek">
+            <span id="tRemain">-0:00</span>
+          </div>
+          <div class="transport">
+            <button class="transport-btn" data-media="previous" aria-label="Previous">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h2v14H7zM20 5v14l-11-7z"/></svg>
+            </button>
+            <button class="transport-btn primary" data-media="playPause" id="playPause" aria-label="Play or pause">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path id="playPausePath" d="M8 5h3v14H8zM13 5h3v14h-3z"/></svg>
+            </button>
+            <button class="transport-btn" data-media="next" aria-label="Next">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5h2v14h-2zM4 5v14l11-7z"/></svg>
+            </button>
+            <button class="transport-btn extra" data-goto="lyrics" data-tip="Lyrics" aria-label="Lyrics">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4.6" width="14" height="14.8" rx="2.2"/><path d="M8.4 9.4h7.2M8.4 12.4h7.2M8.4 15.4h4.4"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <!-- lyrics ----------------------------------------------------- -->
+        <section class="view-pane lyrics-pane" data-view="lyrics">
+          <div class="pane-head"><div class="eyebrow">Lyrics</div><span id="lyricsTrack" class="pane-sub"></span></div>
+          <div class="lyrics-scroll" id="lyricsScroll"></div>
+        </section>
+
+        <!-- timer ------------------------------------------------------ -->
+        <section class="view-pane timer-pane" data-view="timer">
+          <div class="timer-ring">
+            <svg viewBox="0 0 84 84">
+              <circle class="ring-bg" cx="42" cy="42" r="36"></circle>
+              <circle id="timerArc" class="arc" cx="42" cy="42" r="36"></circle>
+            </svg>
+            <span id="timerGlyph">◷</span>
+          </div>
+          <div class="timer-body">
+            <div class="eyebrow">Focus timer</div>
+            <strong id="timerText">05:00</strong>
+            <div class="timer-presets" id="timerPresets">
+              <button class="chip" data-preset="1">1 min</button>
+              <button class="chip" data-preset="5">5 min</button>
+              <button class="chip" data-preset="10">10 min</button>
+              <button class="chip" data-preset="25">25 min</button>
+            </div>
+            <div class="timer-actions" id="timerActions" hidden>
+              <button id="timerPause" class="chip">Pause</button>
+              <button id="timerReset" class="chip">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- calendar --------------------------------------------------- -->
+        <section class="view-pane calendar-pane" data-view="calendar">
+          <div class="pane-head">
+            <button class="nav-arrow" id="calPrev" aria-label="Previous month">‹</button>
+            <div class="cal-title"><b id="calMonth">—</b><small id="calSub"></small></div>
+            <button class="nav-arrow" id="calNext" aria-label="Next month">›</button>
+          </div>
+          <div class="cal-weekdays" id="calWeekdays"></div>
+          <div class="cal-grid" id="calGrid"></div>
+        </section>
+
+        <!-- notes ------------------------------------------------------ -->
+        <section class="view-pane notes-pane" data-view="notes">
+          <div class="pane-head"><div class="eyebrow">Notes</div><span id="notesStatus" class="pane-sub">Saved locally</span></div>
+          <textarea id="notesText" class="notes-text" spellcheck="false" placeholder="Jot something down…"></textarea>
+        </section>
+
+        <!-- notifications ---------------------------------------------- -->
+        <section class="view-pane alerts-pane" data-view="alerts">
+          <div class="pane-head"><div class="eyebrow">Notifications</div><button class="chip tiny" id="alertsClear">Clear</button></div>
+          <div class="alert-list" id="alertList"></div>
+        </section>
+
+        <!-- send alert ------------------------------------------------- -->
+        <section class="view-pane send-pane" data-view="send">
+          <div class="pane-head"><div class="eyebrow">Send alert</div><span class="pane-sub">127.0.0.1:47831</span></div>
+          <input id="sendTitle" class="field" maxlength="120" placeholder="Title" value="Build complete">
+          <input id="sendMessage" class="field" maxlength="300" placeholder="Message" value="Your export is ready.">
+          <div class="send-row">
+            <input id="sendApp" class="field small" maxlength="40" placeholder="App" value="Island">
+            <button class="chip primary-chip" id="sendGo">Send</button>
+          </div>
+        </section>
+
+        <!-- volume ----------------------------------------------------- -->
+        <section class="view-pane volume-pane" data-view="volume">
+          <div class="pane-head"><div class="eyebrow">Volume</div><span class="pane-sub" id="volValue">—</span></div>
+          <div class="big-slider">
+            <div class="big-slider-fill" id="volFill"></div>
+            <input id="volRange" class="range-hit" type="range" min="0" max="100" value="50" aria-label="Volume">
+          </div>
+          <div class="volume-actions">
+            <button class="chip" id="volMute">Mute</button>
+            <button class="chip" id="volOpen" data-goto="customize">Audio settings</button>
+          </div>
+        </section>
+
+        <!-- connectivity ---------------------------------------------- -->
+        <section class="view-pane net-pane" data-view="network">
+          <div class="net-cards">
+            <article class="net-card" id="wifiCard" data-on="true">
+              <span class="net-badge wifi" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M2.4 8.4a14.2 14.2 0 0 1 19.2 0"/><path d="M5.7 12.1a9.4 9.4 0 0 1 12.6 0"/><path d="M9 15.8a4.7 4.7 0 0 1 6 0"/><circle cx="12" cy="19.6" r="1.3"/></svg>
+              </span>
+              <b>Wi-Fi</b>
+              <span class="net-sub" id="netWifiName">Not connected</span>
+            </article>
+            <article class="net-card" id="btCard" data-on="false">
+              <span class="net-badge bt" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M6.5 6.6 17.5 17.4 12 22V2l5.5 4.6L6.5 17.4"/></svg>
+              </span>
+              <b>Bluetooth</b>
+              <span class="net-sub" id="netBtState">Off</span>
+            </article>
+          </div>
+          <div class="net-rows">
+            <button class="net-row" data-net="wifi">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 8.4a14.2 14.2 0 0 1 19.2 0"/><path d="M5.7 12.1a9.4 9.4 0 0 1 12.6 0"/><path d="M9 15.8a4.7 4.7 0 0 1 6 0"/><circle cx="12" cy="19.6" r="1.3"/></svg>
+              <b>Wi-Fi networks</b><i>›</i>
+            </button>
+            <button class="net-row" data-net="bluetooth">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.6 17.5 17.4 12 22V2l5.5 4.6L6.5 17.4"/></svg>
+              <b>Bluetooth devices</b><i>›</i>
+            </button>
+          </div>
+        </section>
+
+        <!-- all apps --------------------------------------------------- -->
+        <section class="view-pane apps-pane" data-view="apps">
+          <div class="pane-head"><div class="eyebrow">All apps</div><span class="pane-sub">Island tools</span></div>
+          <div class="app-grid" id="appGrid"></div>
+        </section>
+
+        <!-- customize -------------------------------------------------- -->
+        <section class="view-pane customize-pane" data-view="customize">
+          <div class="pane-head"><div class="eyebrow">Customize</div><span class="pane-sub">Switches apply live</span></div>
+          <div class="toggle-list" id="toggleList"></div>
+        </section>
+
+      </div>
+
+      <nav class="card-nav" aria-label="Island apps">
+        <button class="nav-plus" id="navPlus" data-tip="App menu" aria-label="App menu">+</button>
+        <div class="nav-icons">
+          <button class="nav-btn" data-goto="home" data-tip="Home" aria-label="Home">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.8 10.4 12 3.9l8.2 6.5V20h-5.4v-5.4H9.2V20H3.8z"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="lyrics" data-tip="Lyrics" aria-label="Lyrics">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.5 3.4l1.8 4.9 4.9 1.8-4.9 1.8-1.8 4.9-1.8-4.9-4.9-1.8 4.9-1.8z"/><path d="M18.2 14.8l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/></svg>
+          </button>
+          <button class="nav-btn nav-music" data-goto="music" data-tip="Now playing" aria-label="Music">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17.4V6.2l10-1.9v11"/><circle cx="6.6" cy="17.6" r="2.4"/><circle cx="16.6" cy="15.6" r="2.4"/></svg>
+            <span>Music</span>
+          </button>
+          <button class="nav-btn" id="navFold" data-tip="Mini player" aria-label="Mini player">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.2" y="5.2" width="17.6" height="13.6" rx="2.4"/><rect x="11.8" y="11.6" width="7" height="5.4" rx="1.2"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="timer" data-tip="Focus timer" aria-label="Focus timer">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.4V12l3.3 2"/></svg>
+          </button>
+          <button class="nav-btn" id="navDnd" data-tip="Do not disturb" aria-label="Do not disturb">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 14.6A8.6 8.6 0 0 1 9.4 3.6a8.6 8.6 0 1 0 11 11z"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="alerts" data-tip="Notifications" aria-label="Notifications">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 11.6a8.4 8.4 0 0 1-8.4 8.4H7.6L3.6 23v-4.5a8.4 8.4 0 1 1 16.8-6.9z"/><path d="M8.4 9.6h7.2M8.4 13h4.8"/></svg>
+            <i class="nav-badge" id="alertBadge" hidden></i>
+          </button>
+          <button class="nav-btn" id="navCopy" data-tip="Copy track" aria-label="Copy track">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="8.8" width="11" height="11" rx="2.2"/><path d="M5 15.2V6a2 2 0 0 1 2-2h9.2"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="notes" data-tip="Notes" aria-label="Notes">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.8 3.2h8L18.2 7.6v13.2H5.8z"/><path d="M13.6 3.4v4.2h4.4"/><path d="M8.8 12h6.4M8.8 15.4h6.4M8.8 8.8h2.6"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="calendar" data-tip="Calendar" aria-label="Calendar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.6" y="5.4" width="16.8" height="15" rx="2.4"/><path d="M3.6 10.2h16.8M8.4 3.2v4M15.6 3.2v4"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="send" data-tip="Send alert" aria-label="Send alert">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5.6" width="18" height="12.8" rx="2.4"/><path d="m3.9 7.1 8.1 6 8.1-6"/></svg>
+          </button>
+        </div>        <button class="nav-btn" data-goto="network" data-tip="Connectivity" aria-label="Connectivity">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 8.4a14.2 14.2 0 0 1 19.2 0"/><path d="M5.7 12.1a9.4 9.4 0 0 1 12.6 0"/><path d="M9 15.8a4.7 4.7 0 0 1 6 0"/><circle cx="12" cy="19.6" r="1.3"/></svg>
+        </button>
+        <button class="nav-btn nav-volume" data-goto="volume" data-tip="Volume" aria-label="Volume">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.4h3.6L12 5.6v12.8L7.6 14.6H4z"/><path d="M15.4 9.2a4 4 0 0 1 0 5.6M18 6.8a8 8 0 0 1 0 10.4"/></svg>
+        </button>
+      </nav>
+
+      <!-- app menu, opened from + or the ... dot -->
+      <div class="menu-pop" id="menuPop" hidden>
+        <div class="pop-volume">
+          <svg viewBox="0 0 24 22" aria-hidden="true"><path class="body" d="M3 7.6h4.2L12.6 3v16L7.2 14.4H3z"/><path class="wave" d="M16.2 7.4a5.2 5.2 0 0 1 0 7.2"/><path class="wave" d="M19 4.6a9 9 0 0 1 0 12.6"/></svg>
+          <div class="pop-volume-fill" id="popVolFill"></div>
+          <input id="popVolRange" class="range-hit" type="range" min="0" max="100" value="50" aria-label="Volume">
+        </div>
+        <div class="pop-grid">
+          <button class="pop-tile" data-menu="apps">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.4" y="3.4" width="7.4" height="7.4" rx="2"/><rect x="13.2" y="3.4" width="7.4" height="7.4" rx="2"/><rect x="3.4" y="13.2" width="7.4" height="7.4" rx="2"/><rect x="13.2" y="13.2" width="7.4" height="7.4" rx="2"/></svg>
+            <b>All apps</b>
+          </button>
+          <button class="pop-tile" data-menu="customize">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.6 19.4l4.2-1L18.9 8.3a2 2 0 0 0-2.8-2.8L5.7 15.6z"/><path d="M14.8 5.8l3.4 3.4"/></svg>
+            <b>Customize</b>
+          </button>
+          <button class="pop-tile" data-menu="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.1"/><path d="M19.3 14a7.7 7.7 0 0 0 0-4l1.7-1.2-1.7-2.9-2 .7a7.7 7.7 0 0 0-3.4-2L13.6 2.5h-3.2L10.1 4.6a7.7 7.7 0 0 0-3.4 2l-2-.7-1.7 2.9L4.7 10a7.7 7.7 0 0 0 0 4l-1.7 1.2 1.7 2.9 2-.7a7.7 7.7 0 0 0 3.4 2l.3 2.1h3.2l.3-2.1a7.7 7.7 0 0 0 3.4-2l2 .7 1.7-2.9z"/></svg>
+            <b>Settings</b>
+          </button>
+          <button class="pop-tile install" data-menu="install">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 12a7.5 7.5 0 1 1-2.3-5.3"/><path d="M19.7 3.4v5h-5"/></svg>
+            <b id="installLabel">Startup</b>
+          </button>
+          <button class="pop-tile" data-menu="fold">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 14 12 8.4 17.8 14"/><path d="M6.2 19.2h11.6"/></svg>
+            <b>Fold in</b>
+          </button>
+          <button class="pop-tile quit" data-menu="quit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.4v8.8"/><path d="M7.6 6.2a7.6 7.6 0 1 0 8.8 0"/></svg>
+            <b>Quit</b>
+          </button>
+        </div>
+      </div>
+
+      <div class="update-banner" id="updateBanner" hidden>
+        <span id="updateText"></span>
+        <button type="button" id="updateRestart" hidden>Restart</button>
+      </div>
+      <div class="toast" id="toast" hidden></div>
+    </div>
+
+  </section>
+</main>
+<script src="island.js"></script>
+</body></html>
