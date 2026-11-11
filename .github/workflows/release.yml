@@ -34,6 +34,10 @@ jobs:
           py -m pip install winsdk pyinstaller
           npm run build:helper
 
+      - name: Delete existing release (if any)
+        run: |
+          gh release delete v${{ package.json.version }} --yes 2>/dev/null || true
+
       - name: Build the NSIS installer and publish the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
