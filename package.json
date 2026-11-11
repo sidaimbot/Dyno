@@ -9,82 +9,10 @@
     "type": "git",
     "url": "https://github.com/sidaimbot/Dyno.git"
   },
-  "scripts": {
-    "start": "electron .",
-    "demo": "cross-env ISLAND_DEMO=1 electron .",
-    "postinstall": "electron-builder install-app-deps",
-    "build:helper": "py -m PyInstaller --noconfirm --clean --onefile --name smtc_helper --console --hidden-import winsdk --collect-all winsdk --distpath helpers --workpath build/pyinstaller --specpath build/pyinstaller helpers/smtc_helper.py"
-  },
   "dependencies": {
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.11",
     "loudness": "^0.4.2",
     "systeminformation": "^5.27.7"
-  },
-  "devDependencies": {
-    "cross-env": "^7.0.3",
-    "electron": "^40.0.0",
-    "electron-builder": "^26.0.12"
-  },
-  "build": {
-    "appId": "com.dyno.desktop",
-    "productName": "Dyno",
-    "asar": true,
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "main.js",
-      "preload.js",
-      "src/**/*",
-      "assets/**/*",
-      "update-feed.json",
-      "package.json",
-      "!helpers/**",
-      "!**/*.map",
-      "!**/__pycache__/**",
-      "!**/*.pyc"
-    ],
-    "extraResources": [
-      {
-        "from": "helpers/smtc_helper.exe",
-        "to": "helpers/smtc_helper.exe"
-      }
-    ],
-    "icon": "build/icon.ico",
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "executableName": "Dyno",
-      "icon": "build/icon.ico",
-      "signAndEditExecutable": false
-    },
-    "portable": {
-      "artifactName": "${productName}-${version}-Portable.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
-      "installerHeaderIcon": "build/icon.ico",
-      "artifactName": "${productName}-${version}-Setup.${ext}"
-    }
   }
 }
