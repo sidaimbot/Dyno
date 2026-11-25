@@ -1,16 +1,17 @@
-const si = require('systeminformation');
+// Consumes readings pushed by SysMonitor. This module used to poll on its own via
+// systeminformation, whose `battery()` starts three PowerShell processes per reading
+// (Win32_Battery, BatteryStaticData, BatteryFullChargedCapacity) and did so every 30 s,
+// on each cable event and on every card expand.
 class BatteryMonitor {
   constructor({ onChange, onError }) {
     this.onChange = onChange; this.onError = onError;
-    this.timer = null; this.prev = null; this.low = new Set();
+    this.prev = null; this.low = new Set(); this.snapshot = null;
   }
-  async poll() {
-    const b = await si.battery();
-    if (!b.hasBattery) return;
-    // A charge cap (common on laptops) reports isCharging=false while the cable is
-    // still connected, so the cable itself is what counts as "plugged in".
-    const plugged = !!(b.acConnected || b.isCharging);
-    const data = { percent: Math.round(b.percent), charging: plugged, timeRemaining: b.timeRemaining };
+  push(reading) {
+    if (!reading) return;
+    this.snapshot = reading;
+    const plugged = !!reading.charging;
+    const data = { percent: reading.percent, charging: plugged, timeRemaining: reading.timeRemaining };
     // Surface both directions of the charge transition so plugging in and pulling the cable are visible.
     if (this.prev && !this.prev.charging && plugged) this.onChange('charging', data);
     else if (this.prev && this.prev.charging && !plugged) this.onChange('battery', data);
@@ -20,9 +21,9 @@ class BatteryMonitor {
       }
       if (data.percent > threshold + 2) this.low.delete(threshold);
     }
-    this.prev = data;
+    this.prev = { percent: data.percent, charging: plugged };
   }
-  start() { this.poll().catch(this.onError); this.timer = setInterval(() => this.poll().catch(this.onError), 30000); }
-  stop() { clearInterval(this.timer); this.timer = null; }
+  get current() { return this.snapshot; }
+  stop() { this.prev = null; this.low.clear(); }
 }
 module.exports = { BatteryMonitor };

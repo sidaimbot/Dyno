@@ -1,6 +1,6 @@
 {
   "name": "dyno",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A Windows Dyno desktop companion built with Electron",
   "main": "main.js",
   "author": "Dyno",
@@ -21,8 +21,7 @@
   "dependencies": {
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.11",
-    "loudness": "^0.4.2",
-    "systeminformation": "^5.27.7"
+    "loudness": "^0.4.2"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",

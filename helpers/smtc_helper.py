@@ -57,6 +57,7 @@ async def main():
     manager = await Manager.request_async()
     current = None
     art_cache = {}
+    last_art_key = None
 
     async def commands():
         nonlocal current
@@ -115,11 +116,17 @@ async def main():
                     "title": props.title or "Unknown title",
                     "artist": props.artist or "Unknown artist",
                     "album": props.album_title or "",
-                    "art": art, "position": position, "duration": duration,
+                    "position": position, "duration": duration,
                     "playing": playing,
                     "source": session.source_app_user_model_id or "Media session",
                     "sampled_at": time.time(),
                 }
+                # Artwork is a large base64 string. Re-serialising it on every 350 ms tick
+                # cost more CPU than the SMTC read itself and churned the garbage
+                # collector downstream, so it is only sent when the track changes.
+                if key != last_art_key:
+                    last_art_key = key
+                    payload["art"] = art
                 print(json.dumps(payload, ensure_ascii=False), flush=True)
             else:
                 current = None

@@ -4,15 +4,29 @@
   const PLAY_PATH = 'M8.4 3.6 19.6 12 8.4 20.4z';
   const PAUSE_PATH = 'M6.8 3.4h4.5v17.2H6.8zM12.9 3.4h4.5v17.2h-4.5z';
   const ARC = 226.2;
+  const DIAL_ARC = 163.4;   // 2πr for the r=26 rings in the Stats pane
+  // Durations mirrored from island.css. `animationend` is the completion signal everywhere;
+  // these numbers only size the safety fallbacks and the --speed value written back into the
+  // stylesheet, so each one must keep matching the keyframes it names.
+  const ANIM = {
+    enter: 780,   // .island.entering → @keyframes islandEnter
+    exit: 640,    // .island.exiting  → @keyframes islandExit
+    wake: 780,    // .island.waking   → @keyframes wakeEyes
+    blink: 440,   // .island.blinking → @keyframes blink
+    morph: 360    // :root --speed    → width / height / border-radius
+  };
+  // Slack added to a fallback so it never cuts an animation short if the event is missed.
+  const FALLBACK_SLACK = 120;
   const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const PRIORITY = {
     volume: 100, brightness: 95, 'battery-low': 90, notification: 80,
     timer: 50, 'timer:prompt': 50, charging: 30, battery: 25, lyrics: 22, media: 20
   };
   const VIEW_TITLES = {
-    home: 'Home', music: 'Now playing', lyrics: 'Lyrics', timer: 'Focus timer',
+    home: 'Today', music: 'Now playing', lyrics: 'Lyrics', timer: 'Focus timer',
     calendar: 'Calendar', notes: 'Notes', alerts: 'Notifications', send: 'Send alert',
-    volume: 'Volume', apps: 'All apps', customize: 'Customize', network: 'Connectivity'
+    volume: 'Volume', apps: 'All apps', customize: 'Customize', network: 'Connectivity',
+    stats: 'Stats'
   };
 
   class ActivityManager {
@@ -59,6 +73,7 @@
 
   let expanded = false, hovering = false, hoverTimer = null;
   let mediaState = null, mediaAt = 0, activeMedia = null;
+  let idleWatch = null;
   let lyrics = null, displayedLyricIndex = -999, activeTrackKey = '', lyricLoading = false;
   let timerState = null, timerTick = null;
   let settings = { animationSpeed: 1, dnd: false };
@@ -68,16 +83,47 @@
   let alertLog = [];
   let unreadAlerts = 0;
   let calCursor = new Date();
+  let todoItems = null, todoKey = '';
+  let weekKey = '';
+  let weatherLoading = false;
+  let statsActive = false, statsLast = null;
+  let stageReplica = null;
   let volumeState = { value: 50, muted: false };
   let volumeSendTimer = null;
   let toastTimer = null;
   let updateBannerTimer = null;
   let notesSaveTimer = null;
   let lastLyricLine = -999;
+  let headerKey = '';
   let audioCtx = null;
   let exiting = false;
+  let blinkTimer = null;
+  let expandIo = null;
+  let expandNet = null;
 
   /* ---------------- helpers ---------------- */
+  // Fires `done` exactly once: on the matching animationend/animationcancel, or on a
+  // fallback timer if neither arrives. Those events bubble from children, so the name is
+  // checked and both listeners are detached either way — that is what stops a blink or
+  // cardIn ending from satisfying the entrance/exit callback.
+  function onceAnimation(el, name, done, fallbackMs) {
+    let finished = false;
+    let timer = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      el.removeEventListener('animationend', onEnd);
+      el.removeEventListener('animationcancel', onEnd);
+      done();
+    };
+    const onEnd = event => { if (event.animationName === name) finish(); };
+    el.addEventListener('animationend', onEnd);
+    el.addEventListener('animationcancel', onEnd);
+    timer = setTimeout(finish, fallbackMs);
+    return finish;
+  }
+
   function playCue(kind) {
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -139,13 +185,17 @@
     void island.offsetWidth;
     island.classList.add('waking');
     clearTimeout(wakeEyes.timer);
-    wakeEyes.timer = setTimeout(() => island.classList.remove('waking'), 860);
+    // wakeEyes runs 780 ms; clearing the class earlier would cut the double-blink short.
+    wakeEyes.timer = setTimeout(() => island.classList.remove('waking'), ANIM.wake + 40);
   }
 
   function finishEnter() {
     if (!island.classList.contains('entering')) return;
     island.classList.remove('entering');
     wakeEyes();
+    // The window is shown and sized by now, so this pass produces the raster the first
+    // real hover reuses instead of paying for it inside its morph.
+    warmCard();
   }
 
   function playExit() {
@@ -154,7 +204,7 @@
     playCue('exit');
     closeMenu();
     if (expanded) collapse();
-    island.classList.remove('entering', 'waking');
+    island.classList.remove('entering', 'waking', 'blinking');
     island.classList.add('exiting');
     let done = false;
     const complete = () => {
@@ -162,10 +212,9 @@
       done = true;
       window.islandAPI.exitDone();
     };
-    island.addEventListener('animationend', event => {
-      if (event.animationName === 'islandExit') complete();
-    }, { once: true });
-    setTimeout(complete, 720);
+    // islandExit (640 ms) is the completion signal. The fallback lands at 760 ms, still
+    // inside the 900 ms quit fallback in main.js.
+    onceAnimation(island, 'islandExit', complete, ANIM.exit + FALLBACK_SLACK);
   }
 
   function setText(el, value) {
@@ -173,6 +222,11 @@
     const next = String(value ?? '');
     if (el.textContent === next) return;
     el.textContent = next;
+  }
+  // Assigning the value `hidden` already has still counts as a write, and the media pill
+  // re-renders on every state change.
+  function setHidden(el, hidden) {
+    if (el && el.hidden !== hidden) el.hidden = hidden;
   }
   function setSmoothLine(el, value) {
     const next = String(value ?? '');
@@ -183,6 +237,8 @@
       [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-8px)' }],
       { duration: 130, easing: 'ease-in', fill: 'forwards' }
     ).onfinish = () => {
+      // The line was already given its fitted size before this swap started, so the new
+      // text never shows up unfitted for a frame.
       el.textContent = next;
       el.animate(
         [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'translateY(0)' }],
@@ -193,10 +249,19 @@
   function setArt(img, src) {
     const url = src || '';
     if ((img.dataset.src || '') === url) return;
+    img.dataset.src = url;
+    // Artwork set while the card is closed has nothing to cross-fade from, and painting a
+    // blur filter over a just-assigned (still undecoded) image is what made the first card
+    // open stutter. Decode it up front and let the card's own fade cover the swap.
+    if (img.hidden || !img.offsetParent) {
+      img.src = url;
+      if (url && typeof img.decode === 'function') img.decode().catch(() => {});
+      applyArtTint(url);
+      return;
+    }
     img.classList.add('art-swapping');
     setTimeout(() => {
       img.src = url;
-      img.dataset.src = url;
       requestAnimationFrame(() => requestAnimationFrame(() => img.classList.remove('art-swapping')));
     }, 90);
     applyArtTint(url);
@@ -249,7 +314,16 @@
     island.style.setProperty('--tint', base.join(','));
     island.style.setProperty('--tint-light', light.join(','));
   }
-  function compactRight(html) { $('compactRight').innerHTML = html; }
+  // Each banner renderer owns the right-hand slot and sets it to whatever it needs (the
+  // others clear it); the equality check makes repeating a value free, so the seven level
+  // bars are not rebuilt - and their animations not restarted - on every media update.
+  let compactRightHtml = null;
+  function compactRight(html) {
+    const next = String(html ?? '');
+    if (next === compactRightHtml) return;
+    compactRightHtml = next;
+    $('compactRight').innerHTML = next;
+  }
   function wave(playing) {
     return `<div class="wave${playing ? '' : ' paused'}">${'<i></i>'.repeat(7)}</div>`;
   }
@@ -289,12 +363,34 @@
     }
   }
 
-  function toast(message) {
+  function toast(message, ms = 1700) {
     const el = $('toast');
     el.textContent = message;
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, 1700);
+    toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+  }
+  // Moving the island is a gesture with nothing on screen to press, so the card keeps
+  // explaining it until the island has actually been moved once: the note comes back on the
+  // first open of each launch while the gesture is still unused, then stops for good. The
+  // warm-up opens the card too, and must not use the note up unseen.
+  let dragHintTimer = null, dragHintShown = false;
+  function maybeDragHint() {
+    if (settings.dragHintSeen || dragHintShown) return;
+    dragHintShown = true;
+    clearTimeout(dragHintTimer);
+    dragHintTimer = setTimeout(() => {
+      if (expanded) toast('Double-tap the island and drag to move it', 3200);
+    }, 500);
+  }
+  // Called once the island has really moved: from then on the card's handle and the grab
+  // cursor are the cue, and the note is spent.
+  function markDragLearned() {
+    clearTimeout(dragHintTimer);
+    dragHintTimer = null;
+    if (settings.dragHintSeen) return;
+    settings.dragHintSeen = true;
+    window.islandAPI.setSetting('dragHintSeen', true).catch(() => {});
   }
 
   /* ---------------- playback clock ---------------- */
@@ -322,9 +418,22 @@
     island.classList.remove('idle', 'compact', 'expanded');
     island.classList.add(mode);
     expanded = mode === 'expanded';
+    // A blink belongs to the idle pill; leaving idle must not leave the class behind, or it
+    // would keep fighting the wake animation over the same .eye transform.
+    if (mode !== 'idle') island.classList.remove('blinking');
   }
   function landingView() {
     return mediaState?.title ? 'music' : 'home';
+  }
+  // Playback owns the music tab: a track that starts (or resumes) puts the card on the
+  // player straight away when open, and makes it the pane the next hover lands on when
+  // the island is at rest.
+  function focusMusicTab() {
+    if (exiting || cardView === 'music') return;
+    if (warm) { cardView = 'music'; return; }
+    if (expanded) { setCardView('music'); return; }
+    cardView = 'music';
+    island.dataset.view = 'music';
   }
   function expand() {
     clearTimeout(hoverTimer);
@@ -333,38 +442,155 @@
     if (type) island.dataset.kind = type;
     else island.removeAttribute('data-kind');
     closeMenu();
-    refreshBattery();
-    refreshNetwork();
+    // Both reads come back over IPC and the Wi-Fi one spawns PowerShell (~600 ms of
+    // CPU). Firing them on the same frame as the grow put that work inside the
+    // animation, so let the card finish opening first.
+    clearTimeout(expandIo);
+    expandIo = setTimeout(() => {
+      if (!expanded) return;
+      refreshBattery();
+    }, 420);
+    // The Wi-Fi read spawns PowerShell (~600 ms of CPU machine-wide). Even deferred, it
+    // landed on the tail of the morph and cost frames, so it waits until the card is open.
+    clearTimeout(expandNet);
+    expandNet = setTimeout(() => {
+      if (!expanded) return;
+      refreshNetwork();
+    }, 900);
     updateHeader();
     setCardView(cardView || landingView());
     requestAnimationFrame(fitLyric);
+    if (!island.classList.contains('warming')) maybeDragHint();
   }
   function collapse() {
+    clearTimeout(expandIo);
+    clearTimeout(expandNet);
+    stopStats();
     const type = manager.current?.type;
     setMode(type ? 'compact' : 'idle');
     closeMenu();
     if (!type) island.removeAttribute('data-kind');
-    requestAnimationFrame(() => {
-      if (island.classList.contains('lyrics-line')) fitCompactLine(compactFitText || $('compactTitle').textContent);
-    });
+    // The lyric size is refitted once the collapsing pill has its final width; fitting
+    // here would read the card's width and paint the line at the open card's size.
   }
 
+  // --speed drives width, height, border-radius and the card fade (a fraction of it), so the
+  // setting has to reach the stylesheet before the next morph starts.
+  function applyAnimationSpeed() {
+    const morph = Math.round(ANIM.morph / (settings.animationSpeed || 1));
+    island.style.setProperty('--speed', `${morph}ms`);
+  }
+  // Eyes have their own on/off switch, and the gaze is a separate one: with the eyes hidden
+  // the cursor should not keep moving something nobody can see.
+  function applyEyes() {
+    const eyesOn = settings.eyes !== false;
+    const follow = eyesOn && settings.eyesFollow !== false;
+    island.classList.toggle('eyes-off', !eyesOn);
+    island.classList.toggle('eyes-static', !follow);
+    if (!follow) {
+      const view = $('idleView');
+      view.style.setProperty('--gx', '0px');
+      view.style.setProperty('--gy', '0px');
+    }
+  }
+  // The island moves along the top edge by double-tapping it and sliding sideways: the second
+  // press of the tap becomes the drag, and releasing leaves the island there. Screen
+  // coordinates, because the island follows the pointer — a client-relative delta would read
+  // that movement as more dragging and run away. The offset is session-only, so a relaunch
+  // puts the island back at the top centre of the screen.
+  let positionX = 0;
+  let pointerDrag = null;
+  let positionSend = 0;
+  let lastTapAt = 0, lastTapX = 0, lastTapY = 0;
+  // As far as the host window can travel before its edge meets the screen edge; the card keeps
+  // its own margin inside it. Matches the clamp in the main process's positionIsland().
+  function clampPosition(value) {
+    const limit = Math.max(0, (window.screen.width - window.innerWidth) / 2);
+    return Math.max(-limit, Math.min(limit, Math.round(Number(value) || 0)));
+  }
+  // Each step moves the window, so coalesce the raw pointer rate into one per frame.
+  function previewPosition() {
+    if (positionSend) return;
+    positionSend = requestAnimationFrame(() => {
+      positionSend = 0;
+      window.islandAPI.moveIslandX(positionX);
+    });
+  }
+  // Controls keep their own presses (a double click on a button should fire it, not drag the
+  // card), so the gesture only starts on the island's own surface.
+  const DRAG_IGNORE = 'button, a, input, textarea, select, [contenteditable], #menuPop';
+  island.addEventListener('pointerdown', event => {
+    if (pointerDrag || event.button !== 0) return;
+    if (event.target.closest(DRAG_IGNORE)) return;
+    // A double tap is two presses in quick succession that did not wander apart.
+    const now = event.timeStamp;
+    const again = now - lastTapAt < 420
+      && Math.abs(event.screenX - lastTapX) < 26 && Math.abs(event.screenY - lastTapY) < 26;
+    lastTapAt = now; lastTapX = event.screenX; lastTapY = event.screenY;
+    if (!again) return;
+    lastTapAt = 0;
+    // Also stops the second press selecting the text under it.
+    event.preventDefault();
+    pointerDrag = { screenX: event.screenX, value: positionX };
+    island.classList.add('moving');
+    island.setPointerCapture(event.pointerId);
+  });
+  island.addEventListener('pointermove', event => {
+    if (!pointerDrag) return;
+    const next = clampPosition(pointerDrag.value + (event.screenX - pointerDrag.screenX));
+    if (next === positionX) return;
+    positionX = next;
+    previewPosition();
+  });
+  function endMoveDrag(event) {
+    if (!pointerDrag) return;
+    // Only a drag that actually shifted the island retires the teaching note; a double tap
+    // that ends where it started has not shown the user anything yet.
+    const moved = positionX !== pointerDrag.value;
+    pointerDrag = null;
+    island.classList.remove('moving');
+    if (moved) markDragLearned();
+    // Sliding the card suppresses the leave it causes; replay it if the pointer is off the card
+    // (a clamped drag can finish with the cursor past the edge the island stopped at).
+    if (event?.pointerType !== 'mouse' || !expanded) return;
+    const r = island.getBoundingClientRect();
+    if (event.clientX < r.left || event.clientX > r.right
+      || event.clientY < r.top || event.clientY > r.bottom) leaveIsland();
+  }
+  island.addEventListener('pointerup', endMoveDrag);
+  island.addEventListener('pointercancel', endMoveDrag);
+  // Capture is dropped without a pointerup when the window loses the pointer (focus loss,
+  // devtools); without this the drag state would stay set and hold the card open.
+  island.addEventListener('lostpointercapture', endMoveDrag);
+
   /* ---------------- compact render ---------------- */
-  function resetCompact() {
+  // `type` also decides which compact slots are visible, so a media tick no longer flips
+  // the icon/artwork/bar hidden flags back and forth on every update.
+  function resetCompact(keepFit = false, type = '') {
     island.classList.remove('lyrics-line');
-    resetCompactFit();
+    // A media tick re-renders the pill several times a second; clearing the fitted lyric
+    // size there would put the stylesheet's 16.5px back on screen between ticks, which is
+    // the lyric text pulsing big and small. The size is only reset when the pill really
+    // stops showing a lyric line.
+    if (!keepFit) resetCompactFit();
+    const isMedia = type === 'media';
+    const isHud = type === 'volume' || type === 'brightness';
     const icon = $('compactIcon');
-    icon.hidden = false;
-    icon.classList.remove('bare', 'is-muted');
-    icon.textContent = '✦';
-    $('compactArt').hidden = true;
-    $('compactCopy').hidden = false;
-    $('compactBar').hidden = true;
-    $('compactRight').textContent = '';
+    setHidden(icon, isMedia);
+    // Removing tokens an element does not have still rewrites its class attribute, which is
+    // one style invalidation per media tick for nothing.
+    if (icon.classList.contains('bare') || icon.classList.contains('is-muted')) icon.classList.remove('bare', 'is-muted');
+    setText(icon, '✦');
+    setHidden($('compactArt'), !isMedia);
+    setHidden($('compactCopy'), isHud);
+    setHidden($('compactBar'), !isHud);
   }
   function render(item) {
     const { type, data } = item;
-    window.islandAPI.setIdleWatch(type === 'idle');
+    // Idle watching only changes when the island enters or leaves the idle state; sending
+    // it on every media tick was an IPC round-trip 3×/s for the same value.
+    const wantIdleWatch = type === 'idle';
+    if (wantIdleWatch !== idleWatch) { idleWatch = wantIdleWatch; window.islandAPI.setIdleWatch(wantIdleWatch); }
     if (type === 'idle') {
       island.removeAttribute('data-kind');
       setMode(hovering ? 'expanded' : 'idle');
@@ -372,10 +598,9 @@
       return;
     }
     island.dataset.kind = type;
-    island.style.setProperty('--speed', `${Math.round(460 / (settings.animationSpeed || 1))}ms`);
-    island.classList.remove('lyrics-line');
+    applyAnimationSpeed();
     setMode(expanded ? 'expanded' : 'compact');
-    resetCompact();
+    resetCompact(type === 'media', type);
     if (type === 'media') renderCompactMedia();
     else if (type === 'volume' || type === 'brightness') renderCompactHud(type, data);
     else if (type === 'notification') renderNotice(data);
@@ -383,21 +608,28 @@
     else if (type === 'charging' || type === 'battery' || type === 'battery-low') renderBattery(type, data);
     else if (type === 'lyrics') renderLegacyLyrics(data);
     if (expanded) { updateHeader(); updateCard(); }
+    // A card that changed while the island was at rest needs its new content rasterised
+    // before the next hover, or that hover pays for it (the artwork of a track that
+    // started after boot is the common case).
+    else scheduleWarmForContent();
   }
 
   function renderCompactMedia() {
     const media = mediaState || activeMedia || {};
     activeMedia = media;
-    $('compactIcon').hidden = true;
-    $('compactArt').hidden = false;
     setArt($('compactArt'), media.art);
+    // The level bars fill the right-hand slot and take width away from the lyric box, so
+    // they go in before any fit. Fitting while the slot is still empty sized the line for
+    // a pill 11px wider than the one on screen, and the ResizeObserver then fitted it
+    // again once the bars landed - that pair of sizes once per tick was the pulsing.
+    compactRight(wave(!!media.playing));
     if (lyrics && lyrics.synced) showCurrentLyric();
     else {
       island.classList.remove('lyrics-line');
+      resetCompactFit();
       setText($('compactTitle'), media.title || 'Nothing playing');
       setText($('compactSubtitle'), media.artist || prettySource(media.source));
     }
-    compactRight(wave(!!media.playing));
   }
 
   // Speaker glyph shared by the volume HUD: one wedge plus level-dependent arcs.
@@ -419,8 +651,6 @@
     icon.classList.toggle('is-muted', muted);
     if (type === 'volume') icon.innerHTML = volumeIcon(value, muted);
     else icon.textContent = '☀';
-    $('compactCopy').hidden = true;
-    $('compactBar').hidden = false;
     $('compactFill').style.width = `${value}%`;
     compactRight(muted ? 'Muted' : `${value}%`);
     lastVolume = { value, muted };
@@ -431,13 +661,14 @@
   }
 
   function renderNotice(data) {
-    $('compactIcon').textContent = '●';
+    setText($('compactIcon'), '●');
+    compactRight('');
     setText($('compactTitle'), data.title || 'Notification');
     setText($('compactSubtitle'), data.message || data.app || '');
   }
 
   function renderTimer(type, data) {
-    $('compactIcon').textContent = '◷';
+    setText($('compactIcon'), '◷');
     if (type === 'timer:prompt') {
       setText($('compactTitle'), 'Start timer');
       setText($('compactSubtitle'), 'Choose a duration');
@@ -466,10 +697,10 @@
     renderBatteryPill();
     island.dataset.level = type === 'battery-low' ? 'low' : charging ? 'charging' : 'normal';
     const icon = $('compactIcon');
-    icon.textContent = '';
-    if (type === 'battery-low') icon.textContent = '!';
+    if (type === 'battery-low') setText(icon, '!');
     else icon.innerHTML = batteryGauge(percent, 'batt-lg');
     if (type === 'battery-low') {
+      compactRight('');
       setText($('compactTitle'), `Only ${percent}% battery left`);
       setText($('compactSubtitle'), 'Plug in your charger!');
     } else {
@@ -484,7 +715,8 @@
   }
 
   function renderLegacyLyrics(data) {
-    $('compactIcon').textContent = '♫';
+    setText($('compactIcon'), '♫');
+    compactRight('');
     setText($('compactTitle'), data.current || 'No lyrics found');
     setText($('compactSubtitle'), data.next || '');
   }
@@ -492,12 +724,19 @@
   /* ---------------- header ---------------- */
   function updateHeader() {
     const now = new Date();
+    // Intl formatting is not free and the header only shows minutes, so once per minute
+    // is all the ticker needs to do instead of re-formatting four times a second.
+    const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+    if (key === headerKey) return;
+    headerKey = key;
     const date = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' })
       .replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
     setText($('headDate'), date.toUpperCase());
     setText($('headClock'), clock12(now));
-    setText($('homeTime'), clock12(now));
-    setText($('homeDate'), now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }));
+    const hours = now.getHours() % 12 || 12;
+    setText($('todayHour'), String(hours));
+    setText($('todayMin'), String(now.getMinutes()).padStart(2, '0'));
+    setText($('todayDay'), `${now.getHours() < 12 ? 'AM' : 'PM'} · ${now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' })}`);
   }
 
   async function refreshBattery() {
@@ -542,8 +781,9 @@
     customize: renderCustomize,
     network: renderNetwork,
     timer: renderTimerPane,
+    stats: startStats,
     music: updateCard,
-    home: updateCard
+    home: renderToday
   };
   function setCardView(name) {
     if (!VIEW_TITLES[name]) name = landingView();
@@ -557,6 +797,7 @@
     });
     closeMenu();
     if (name !== 'network') clearInterval(netTimer);
+    if (name !== 'stats') stopStats();
     if (name === 'alerts') { unreadAlerts = 0; renderAlertBadge(); }
     updateCard();
     viewLoaders[name]?.();
@@ -580,19 +821,6 @@
     updateLyricText();
     updateTimeline();
     $('playPausePath').setAttribute('d', media.playing ? PAUSE_PATH : PLAY_PATH);
-    $('homePlayPath').setAttribute('d', media.playing ? PAUSE_PATH : PLAY_PATH);
-
-    setText($('homeTitle'), has ? media.title : 'Nothing playing');
-    setText($('homeArtist'), has ? `${media.artist || 'Unknown artist'} · ${prettySource(media.source)}` : 'Open a player to begin');
-    const homeArt = $('homeArt');
-    if (art) {
-      if ((homeArt.dataset.src || '') !== art) { homeArt.src = art; homeArt.dataset.src = art; }
-      homeArt.hidden = false;
-    } else {
-      homeArt.hidden = true;
-      homeArt.dataset.src = '';
-      homeArt.removeAttribute('src');
-    }
   }
 
   function updateTimeline() {
@@ -639,54 +867,105 @@
     el.style.maxHeight = `${Math.round(LYRIC_MIN * 1.12 * 3 + 2)}px`;
   }
 
-  /* the compact pill headline: shrink until the whole line fits the pill */
-  const COMPACT_MAX = 16.5, COMPACT_MIN = 11;
-  const compactFitCache = new Map();
-  let compactFitText = '';
-  function fitCompactLine(text) {
-    const el = $('compactTitle');
-    if (!el) return;
-    const value = String(text ?? el.textContent ?? '');
-    compactFitText = value;
-    // Zero while the card is open (the pill is display:none) and still the card's
-    // width on the first frames of the collapse, so the observer below refits
-    // once the pill has its real width instead of baking a wrong size in.
-    if (!$('compactCopy')?.clientWidth || !el.clientWidth) return;
-    const key = `${value}|${el.clientWidth}`;
-    let size = compactFitCache.get(key);
-    if (!size) {
-      // Measure the lyric element itself: it is already laid out at the pill's
-      // real width, so the size comes from what will actually be drawn and can
-      // never disagree with the box the text ends up clipped in.
-      const shown = el.textContent;
-      const swap = shown !== value;
-      if (swap) el.textContent = value;
-      size = COMPACT_MIN;
-      for (let candidate = COMPACT_MAX; candidate > COMPACT_MIN; candidate -= 0.5) {
-        el.style.fontSize = `${candidate}px`;
-        el.style.letterSpacing = `${(-candidate * 0.021).toFixed(2)}px`;
-        if (el.scrollWidth <= el.clientWidth + 0.5) { size = candidate; break; }
-      }
-      if (swap) el.textContent = shown;
-      if (compactFitCache.size > 60) compactFitCache.clear();
-      compactFitCache.set(key, size);
+  /* the compact pill lyric line: one size per track, taken from the track's longest line,
+     so the text reads at a steady size instead of rescaling line by line */
+  const COMPACT_MAX = 19, COMPACT_MIN = 13.5;
+  let compactMeasureEl = null;
+  let lyricFit = { track: '', avail: 0, size: 0 };
+  let lyricSizeRetry = 0;
+  // Candidate sizes are tried on a hidden twin, never on the line on screen: the pill only
+  // receives the size that was chosen, together with the text it belongs to, so a new line
+  // is never painted once at the stylesheet's size and then shrunk.
+  function compactMeasure() {
+    const box = $('compactCopy');
+    if (!box) return null;
+    if (!compactMeasureEl || !compactMeasureEl.isConnected) {
+      compactMeasureEl = document.createElement('strong');
+      compactMeasureEl.className = 'fit-measure';
+      compactMeasureEl.setAttribute('aria-hidden', 'true');
+      box.appendChild(compactMeasureEl);
     }
+    return compactMeasureEl;
+  }
+  // The copy box animates with the island's morph, so its width is only usable once it has
+  // held still: fitting every intermediate width would drag the lyric up and down with the
+  // opening and closing card. Zero while the card is open, where the pill has none.
+  let compactWidth = 0, compactWidthAt = 0;
+  function compactWidthReady(avail) {
+    if (avail !== compactWidth) {
+      compactWidth = avail;
+      compactWidthAt = performance.now();
+      return false;
+    }
+    return performance.now() - compactWidthAt >= 90;
+  }
+  // Width scales with size, so the line that is widest at the maximum size is the one that
+  // decides the size the whole track can use. Only that line is then tried against the
+  // candidates, so a track costs one pass over its lines per pill width, not one per tick.
+  function lyricTrackSize() {
+    const avail = $('compactCopy')?.clientWidth || 0;
+    if (!avail || expanded || !lyrics?.synced || !lyrics.lines?.length) return 0;
+    if (!compactWidthReady(avail)) return 0;
+    const track = trackKeyOf(mediaState || activeMedia || {});
+    if (lyricFit.track === track && lyricFit.avail === avail) return lyricFit.size;
+    const measure = compactMeasure();
+    if (!measure) return 0;
+    const at = size => {
+      measure.style.fontSize = `${size}px`;
+      measure.style.letterSpacing = `${(-size * 0.021).toFixed(2)}px`;
+    };
+    let widest = '';
+    let width = 0;
+    at(COMPACT_MAX);
+    for (const line of lyrics.lines) {
+      const text = String(line.text || '').trim();
+      if (!text) continue;
+      measure.textContent = text;
+      if (measure.scrollWidth > width) { width = measure.scrollWidth; widest = text; }
+    }
+    let size = 0, overflow = false;
+    if (widest) {
+      measure.textContent = widest;
+      at(COMPACT_MIN);
+      // Checked at the smallest size the pill will use: if the longest line still does not
+      // fit there, every line of the track needs the fading, left-aligned treatment.
+      overflow = measure.scrollWidth > avail + 0.5;
+      size = COMPACT_MIN;
+      if (!overflow) {
+        for (let candidate = COMPACT_MAX; candidate > COMPACT_MIN; candidate -= 0.5) {
+          at(candidate);
+          if (measure.scrollWidth <= avail + 0.5) { size = candidate; break; }
+        }
+      }
+      measure.textContent = '';
+    }
+    lyricFit = { track, avail, size, overflow };
+    return size;
+  }
+  function applyCompactSize(size) {
+    const el = $('compactTitle');
+    if (!el || !size) return;
     el.style.fontSize = `${size}px`;
     el.style.letterSpacing = `${(-size * 0.021).toFixed(2)}px`;
   }
-  // The lyric box changes width whenever the pill appears or finishes collapsing;
-  // refit on those changes so a line is never left sized for a different pill.
+  // The lyric box changes width whenever the pill appears or finishes collapsing. The
+  // observer only waits for the width to settle; showCurrentLyric then re-sizes the line
+  // already on screen, so the text keeps its size while the pill grows or shrinks.
+  let compactFitTimer = 0;
   if (typeof ResizeObserver === 'function' && $('compactCopy')) {
-    new ResizeObserver(entries => {
-      const width = Math.round(entries[entries.length - 1].contentRect.width);
-      if (!width || !island.classList.contains('compact')) return;
-      if (!island.classList.contains('lyrics-line')) return;
-      fitCompactLine(compactFitText || $('compactTitle').textContent);
+    new ResizeObserver(() => {
+      clearTimeout(compactFitTimer);
+      compactFitTimer = setTimeout(() => {
+        if (expanded || !island.classList.contains('compact')) return;
+        if (manager.current?.type === 'media') showCurrentLyric();
+      }, 110);
     }).observe($('compactCopy'));
   }
   function resetCompactFit() {
     const el = $('compactTitle');
-    if (el) { el.style.fontSize = ''; el.style.letterSpacing = ''; }
+    if (el && el.style.fontSize) { el.style.fontSize = ''; el.style.letterSpacing = ''; }
+    island.classList.remove('lyrics-long');
+    lyricFit = { track: '', avail: 0, size: 0 };
   }
 
   function updateLyricText() {
@@ -717,6 +996,83 @@
   }
 
   /* ---------------- lyrics ---------------- */
+  /* Long lyrics shrink to the pane instead of spilling out of it. The step is
+     measured from the laid-out box (so wrapped words and the pane height both
+     count, not just the character count), which keeps a paragraph reading in
+     full while short lines stay at their normal size. */
+  const LYRIC_TEXT_MAX = 15, LYRIC_CURRENT_MAX = 19;
+  // Plain lyrics are a whole song in one block of short lines, so a single column can
+  // only hold them by shrinking below a comfortable size. Below these limits it flows
+  // into a second column instead, and scrolling is the last resort.
+  const PLAIN_READABLE = 12, PLAIN_COLUMN_MIN = 10;
+  function sizeToFit(el, base, min, boxHeight, lineHeight = 1.3) {
+    const apply = value => {
+      el.style.fontSize = `${value}px`;
+      el.style.lineHeight = String(lineHeight);
+      el.style.letterSpacing = `${(-value * 0.012).toFixed(2)}px`;
+    };
+    // font-size is animated by the stylesheet, so the intermediate values of the
+    // search must not be transitioned or every measurement would read the old size.
+    const transition = el.style.transition;
+    el.style.transition = 'none';
+    let size = base;
+    apply(size);
+    while (size > min && el.scrollHeight > boxHeight + 1) {
+      size = Math.max(min, size - 0.5);
+      apply(size);
+    }
+    void el.offsetHeight;
+    el.style.transition = transition;
+    return size;
+  }
+  // The pane keeps ticking while the card is collapsed, where it has no height at all.
+  // Measuring there would shrink every line to the minimum and leave the list
+  // unreadable the next time it opens, so fitting only happens in a real pane.
+  function lyricsRoom() {
+    const scroll = $('lyricsScroll');
+    return scroll && scroll.clientHeight > 60 ? scroll.clientHeight - 12 : 0;
+  }
+  function fitPlainLyrics() {
+    const scroll = $('lyricsScroll');
+    const block = scroll?.querySelector('.lyric-line.plain');
+    const room = lyricsRoom();
+    if (!scroll || !block || !room) return;
+    // Short paragraphs stay on one line-per-row column at full size.
+    block.classList.remove('two-col');
+    sizeToFit(block, LYRIC_TEXT_MAX, PLAIN_READABLE, room, 1.45);
+    // A song that would have to go smaller than that reads better in two columns, where
+    // each column holds half as many lines and the type can stay large.
+    if (block.scrollHeight > room + 1) {
+      block.classList.add('two-col');
+      sizeToFit(block, LYRIC_TEXT_MAX, PLAIN_COLUMN_MIN, room, 1.42);
+    }
+    scroll.scrollTop = 0;
+  }
+  function fitLyricsText() {
+    const scroll = $('lyricsScroll');
+    const room = lyricsRoom();
+    if (!scroll || !room) return;
+    if (scroll.querySelector('.lyric-line.plain')) { fitPlainLyrics(); return; }
+    scroll.querySelectorAll('.lyric-line').forEach(el => {
+      const current = el.classList.contains('current');
+      // The active line leads the view, so it may use more of the height than the
+      // lines around it; the rest stay compact so the list still scans at a glance.
+      const size = sizeToFit(el, current ? LYRIC_CURRENT_MAX : LYRIC_TEXT_MAX, 9,
+        room * (current ? 0.62 : 0.42));
+      // Remember the resting size so a line that stops being current returns to it.
+      if (!current) el.dataset.fit = String(size);
+    });
+  }
+  function restoreLyricLine(el) {
+    if (!el) return;
+    const room = lyricsRoom();
+    const size = Number(el.dataset.fit);
+    if (!size && room) { sizeToFit(el, LYRIC_TEXT_MAX, 9, room * 0.42); return; }
+    el.style.fontSize = `${size || LYRIC_TEXT_MAX}px`;
+    el.style.lineHeight = '1.3';
+    el.style.letterSpacing = `${(-size * 0.012).toFixed(2)}px`;
+  }
+
   function renderLyricsPane() {
     const media = mediaState || {};
     setText($('lyricsTrack'), media.title ? `${media.title} · ${media.artist || 'Unknown artist'}` : '');
@@ -736,9 +1092,9 @@
       if (!text) { scroll.innerHTML = '<div class="empty">No lyrics found for this track</div>'; return; }
       const block = document.createElement('div');
       block.className = 'lyric-line plain';
-      block.style.whiteSpace = 'pre-wrap';
       block.textContent = text;
       scroll.appendChild(block);
+      fitPlainLyrics();
       return;
     }
     lyrics.lines.forEach((line, index) => {
@@ -751,12 +1107,14 @@
     });
     lastLyricLine = -999;
     markLyricLines(true);
+    fitLyricsText();
   }
 
   function markLyricLines(force) {
     if (!lyrics?.synced || cardView !== 'lyrics') return;
     const index = lyricIndex(currentPosition());
     if (!force && index === lastLyricLine) return;
+    const previous = lastLyricLine;
     lastLyricLine = index;
     const scroll = $('lyricsScroll');
     const lines = scroll.querySelectorAll('.lyric-line');
@@ -764,7 +1122,14 @@
       el.classList.toggle('current', i === index);
       el.classList.toggle('past', i < index);
     });
+    // The line that just lost the highlight goes back to its resting size, and the
+    // new one grows to lead the view - unless it is a long line that has to shrink.
+    if (previous >= 0 && previous !== index) restoreLyricLine(lines[previous]);
     const active = lines[index];
+    const room = lyricsRoom();
+    if (active && room && !scroll.querySelector('.lyric-line.plain')) {
+      sizeToFit(active, LYRIC_CURRENT_MAX, 9, room * 0.62);
+    }
     if (active) {
       scroll.scrollTo({ top: active.offsetTop - scroll.clientHeight / 2 + active.offsetHeight / 2, behavior: force ? 'auto' : 'smooth' });
     }
@@ -792,18 +1157,35 @@
     updateLyricText();
     if (!lyrics?.synced) {
       island.classList.remove('lyrics-line');
+      resetCompactFit();
       setText($('compactTitle'), media.title || '♪');
       setText($('compactSubtitle'), media.artist || '');
       return;
     }
     const index = lyricIndex(currentPosition());
     const current = index >= 0 ? lyrics.lines[index].text : '♪';
+    const label = current === '♪' ? (media.title || '♪') : current;
+    const size = lyricTrackSize();    if (!size) {
+      // No measurable pill yet (card open, cold-start warm-up, first frames of the media
+      // morph). Setting the line now would paint it at the stylesheet's 16.5px and then
+      // shrink it, so the pill keeps the title it already has for one more frame instead.
+      if (!lyricSizeRetry) {
+        lyricSizeRetry = requestAnimationFrame(() => {
+          lyricSizeRetry = 0;
+          if (!expanded && manager.current?.type === 'media') showCurrentLyric();
+        });
+      }
+      return;
+    }
+    // Size first: the line still fading out must not pop to the stylesheet's 16.5px when
+    // the lyrics style lands a moment before the new text does.
+    applyCompactSize(size);
     island.classList.add('lyrics-line');
+    island.classList.toggle('lyrics-long', !!lyricFit.overflow);
     $('compactSubtitle').textContent = '';
-    fitCompactLine(current === '♪' ? (media.title || '♪') : current);
     if (index === displayedLyricIndex) return;
     displayedLyricIndex = index;
-    setSmoothLine($('compactTitle'), current === '♪' ? (media.title || '♪') : current);
+    setSmoothLine($('compactTitle'), label);
   }
 
   /* ---------------- timer ---------------- */
@@ -829,8 +1211,8 @@
     setText($('timerText'), fmt(Math.ceil(left)));
     $('timerArc').style.strokeDashoffset = String(ARC * (1 - Math.max(0, Math.min(1, left / total))));
     if (island.dataset.kind === 'timer' || island.dataset.kind === 'timer:prompt') {
-      $('compactSubtitle').textContent = fmt(Math.ceil(left));
-      $('compactRight').textContent = fmt(Math.ceil(left));
+      setText($('compactSubtitle'), fmt(Math.ceil(left)));
+      compactRight(fmt(Math.ceil(left)));
     }
   }
   function startTimer(seconds) {
@@ -864,6 +1246,243 @@
     manager.show('timer', { seconds: Math.max(1, Math.ceil(timerRemaining())) }, { priority: 50, duration: 0 });
     updateTimerUi();
   }
+
+  /* ---------------- today ---------------- */
+  function dayStamp() {
+    const now = new Date();
+    return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+  }
+
+  function renderWeek() {
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+    const key = String(monday.getTime());
+    if (key === weekKey) return;
+    weekKey = key;
+    const end = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+    const short = date => date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    setText($('weekRange'), `${short(monday)} – ${short(end)}`);
+    const strip = $('weekStrip');
+    strip.replaceChildren();
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+      const cell = document.createElement('div');
+      cell.className = 'week-day' + (date.toDateString() === now.toDateString() ? ' today' : '');
+      const label = document.createElement('small');
+      label.textContent = WEEKDAYS[i];
+      const number = document.createElement('b');
+      number.textContent = String(date.getDate());
+      cell.append(label, number);
+      strip.appendChild(cell);
+    }
+  }
+
+  function loadTodos() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('dyno.todos') || 'null');
+      if (saved?.date === dayStamp() && Array.isArray(saved.items)) return saved.items.filter(item => item && item.text);
+    } catch (_) {}
+    return [];
+  }
+  function saveTodos() {
+    try { localStorage.setItem('dyno.todos', JSON.stringify({ date: dayStamp(), items: todoItems })); } catch (_) {}
+  }
+  function renderTodos(force) {
+    if (!todoItems) todoItems = loadTodos();
+    const key = todoItems.map(item => `${item.id}:${item.done ? 1 : 0}:${item.text}`).join('|');
+    if (!force && key === todoKey) return;
+    todoKey = key;
+    const list = $('todoList');
+    list.replaceChildren();
+    if (!todoItems.length) {
+      list.innerHTML = '<div class="todo-empty">Nothing on the list yet.</div>';
+    } else {
+      const fragment = document.createDocumentFragment();
+      for (const item of todoItems) {
+        const row = document.createElement('div');
+        row.className = 'todo-item' + (item.done ? ' done' : '');
+        row.dataset.id = String(item.id);
+        const dot = document.createElement('i');
+        dot.className = 'todo-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        const text = document.createElement('span');
+        text.textContent = item.text;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'todo-x';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', `Remove ${item.text}`);
+        row.append(dot, text, remove);
+        fragment.appendChild(row);
+      }
+      list.appendChild(fragment);
+    }
+    const done = todoItems.reduce((count, item) => count + (item.done ? 1 : 0), 0);
+    setText($('todoCount'), `${done}/${todoItems.length}`);
+  }
+
+  function paintWeather(weather) {
+    const icon = $('wxIcon');
+    if (!weather || !Number.isFinite(weather.temp)) {
+      setText($('wxTemp'), '—°');
+      setText($('wxDesc'), 'Weather');
+      if (icon) icon.textContent = '☀';
+      return;
+    }
+    const code = Number(weather.code) || 0;
+    const state = code === 0 ? 'Clear' : code <= 3 ? 'Partly cloudy' : code <= 48 ? 'Cloudy'
+      : code <= 67 ? 'Rain' : code <= 77 ? 'Snow' : code <= 82 ? 'Showers' : 'Storm';
+    const glyph = code <= 1 ? '☀' : code <= 3 ? '⛅' : code <= 77 ? '☁' : '☂';
+    if (icon) icon.textContent = glyph;
+    setText($('wxTemp'), `${Math.round(weather.temp)}°C`);
+    setText($('wxDesc'), state);
+  }
+
+  async function refreshWeather() {
+    if (weatherLoading) return;
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem('dyno.weather') || 'null'); } catch (_) {}
+    if (cached && Number.isFinite(cached.temp)) paintWeather(cached);
+    if (cached && Date.now() - cached.at < 30 * 60 * 1000) return;
+    weatherLoading = true;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 6000);
+    try {
+      let location = cached?.location;
+      if (!location) {
+        const found = await fetch('https://ipwho.is/', { signal: abort.signal }).then(response => response.json());
+        if (found?.success !== false && Number.isFinite(found?.latitude)) {
+          location = { lat: found.latitude, lon: found.longitude };
+        }
+      }
+      if (!location) throw new Error('no location');
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${location.lat}&longitude=${location.lon}&current=temperature_2m,weather_code`;
+      const forecast = await fetch(url, { signal: abort.signal }).then(response => response.json());
+      const current = forecast?.current;
+      if (!Number.isFinite(current?.temperature_2m)) throw new Error('no reading');
+      const weather = { at: Date.now(), temp: current.temperature_2m, code: current.weather_code, location };
+      try { localStorage.setItem('dyno.weather', JSON.stringify(weather)); } catch (_) {}
+      paintWeather(weather);
+    } catch (_) {
+      if (!cached) paintWeather(null);
+    } finally {
+      clearTimeout(timer);
+      weatherLoading = false;
+    }
+  }
+
+  function renderToday() {
+    renderWeek();
+    renderTodos();
+    refreshWeather();
+  }
+
+  /* ---------------- stats ---------------- */
+  const APP_COLORS = ['#e9b84e', '#b66bff', '#58c98a', '#5aa9f0'];
+  function bytesRate(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= 1048576) return `${(value / 1048576).toFixed(1)} MB/s`;
+    if (value >= 1024) return `${Math.round(value / 1024)} KB/s`;
+    return `${Math.round(value)} B/s`;
+  }
+  function sizeGB(value) {
+    const number = Math.max(0, Number(value) || 0);
+    return number >= 100 ? String(Math.round(number)) : number.toFixed(1);
+  }
+  // "AMD Ryzen 7 8840U w/ Radeon 780M Graphics" -> "Ryzen 7 8840U": the vendor and the
+  // integrated-graphics tail only cost space in a 120px meter, and the ellipsis looked broken.
+  function chipName(name) {
+    const short = String(name || '')
+      .replace(/\s*\((?:tm|r|c)\)/gi, '')
+      .replace(/^(?:AMD|Intel|NVIDIA|Qualcomm|Apple)\s+/i, '')
+      .replace(/\s+(?:w\/|with)\s+.*$/i, '')
+      .replace(/\s+CPU\s*@.*$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return short || '—';
+  }
+  function sizeMB(mb) {
+    const value = Math.max(0, Number(mb) || 0);
+    return value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${Math.round(value)} MB`;
+  }
+  function paintStats(snapshot) {
+    statsLast = snapshot;
+    if (!snapshot) return;
+    const ring = (id, percent) => {
+      const arc = $(id);
+      if (arc) arc.style.strokeDashoffset = String(DIAL_ARC * (1 - Math.max(0, Math.min(100, percent)) / 100));
+    };
+    setText($('cpuPct'), `${Math.round(snapshot.cpu.percent)}%`);
+    ring('cpuArc', snapshot.cpu.percent);
+    setText($('cpuName'), chipName(snapshot.cpu.name));
+    setText($('cpuClock'), `${(snapshot.cpu.mhz / 1000).toFixed(1)} GHz`);
+    setText($('cpuProcs'), snapshot.procs ? `${snapshot.procs} proc` : '—');
+
+    setText($('gpuPct'), `${Math.round(snapshot.gpu.percent)}%`);
+    ring('gpuArc', snapshot.gpu.percent);
+    setText($('gpuName'), chipName(snapshot.gpu.name));
+    const vram = snapshot.gpu.vramGB ? `${sizeGB(snapshot.gpu.vramGB)} GB` : '';
+    setText($('gpuVram'), vram || '—');
+    $('gpuVram').parentElement.hidden = !vram;
+
+    setText($('ramPct'), `${Math.round(snapshot.ram.percent)}%`);
+    ring('ramArc', snapshot.ram.percent);
+    setText($('ramUse'), `${sizeGB(snapshot.ram.usedGB)} / ${sizeGB(snapshot.ram.totalGB)} GB`);
+    setText($('ramFree'), `${sizeGB(snapshot.ram.freeGB)} GB free`);
+
+    setText($('diskUse'), `${sizeGB(snapshot.disk.usedGB)} / ${sizeGB(snapshot.disk.totalGB)} GB`);
+    const diskBar = $('diskBar');
+    if (diskBar && snapshot.disk.totalGB) {
+      diskBar.style.width = `${Math.max(0, Math.min(100, (snapshot.disk.usedGB / snapshot.disk.totalGB) * 100))}%`;
+    }
+    setText($('netDown'), bytesRate(snapshot.net.down));
+    setText($('netUp'), bytesRate(snapshot.net.up));
+
+    const up = Math.max(0, Math.round(snapshot.uptime));
+    setText($('uptime'), `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m`);
+
+    const apps = snapshot.apps || [];
+    const host = $('topApps');
+    host.replaceChildren();
+    const peak = apps.reduce((max, app) => Math.max(max, app.mb), 0) || 1;
+    apps.forEach((app, index) => {
+      const row = document.createElement('div');
+      row.className = 'app-row';
+      const icon = document.createElement('i');
+      icon.className = 'app-ico';
+      icon.style.background = APP_COLORS[index % APP_COLORS.length];
+      icon.textContent = app.name.slice(0, 1).toUpperCase();
+      const name = document.createElement('b');
+      name.textContent = app.name;
+      const value = document.createElement('span');
+      value.className = 'app-mb';
+      value.textContent = sizeMB(app.mb);
+      const track = document.createElement('i');
+      track.className = 'app-track';
+      const fill = document.createElement('i');
+      fill.style.width = `${Math.max(2, Math.round((app.mb / peak) * 100))}%`;
+      track.appendChild(fill);
+      row.append(icon, name, value, track);
+      host.appendChild(row);
+    });
+  }
+
+  function startStats() {
+    if (warm || !expanded) return;
+    if (!statsActive) {
+      statsActive = true;
+      window.islandAPI.statsStart().catch(() => {});
+    }
+    paintStats(statsLast);
+  }
+  function stopStats() {
+    if (!statsActive) return;
+    statsActive = false;
+    window.islandAPI.statsStop().catch(() => {});
+  }
+  window.islandAPI.on('stats:update', snapshot => {
+    if (expanded && cardView === 'stats') paintStats(snapshot);
+  });
 
   /* ---------------- calendar ---------------- */
   function renderCalendar() {
@@ -1071,7 +1690,8 @@
     send: '<rect x="3" y="5.6" width="18" height="12.8" rx="2.4"/><path d="m3.9 7.1 8.1 6 8.1-6"/>',
     volume: '<path d="M4 9.4h3.6L12 5.6v12.8L7.6 14.6H4z"/><path d="M15.4 9.2a4 4 0 0 1 0 5.6M18 6.8a8 8 0 0 1 0 10.4"/>',
     customize: '<path d="M4.6 19.4l4.2-1L18.9 8.3a2 2 0 0 0-2.8-2.8L5.7 15.6z"/><path d="M14.8 5.8l3.4 3.4"/>',
-    network: '<path d="M2.4 8.4a14.2 14.2 0 0 1 19.2 0"/><path d="M5.7 12.1a9.4 9.4 0 0 1 12.6 0"/><path d="M9 15.8a4.7 4.7 0 0 1 6 0"/><circle cx="12" cy="19.6" r="1.3"/>'
+    network: '<path d="M2.4 8.4a14.2 14.2 0 0 1 19.2 0"/><path d="M5.7 12.1a9.4 9.4 0 0 1 12.6 0"/><path d="M9 15.8a4.7 4.7 0 0 1 6 0"/><circle cx="12" cy="19.6" r="1.3"/>',
+    stats: '<path d="M4 19V10M9.3 19V4.6M14.7 19v-6.4M20 19V7.4"/>'
   };
   function renderApps() {
     const grid = $('appGrid');
@@ -1088,7 +1708,9 @@
     });
   }
 
+  // The list scrolls, so the pair that most people come looking for sits at the top.
   const FEATURE_KEYS = {
+    eyes: 'Eyes', eyesFollow: 'Eyes follow cursor',
     media: 'Now playing', lyrics: 'Synced lyrics', volume: 'Volume HUD',
     brightness: 'Brightness HUD', battery: 'Battery alerts', notifications: 'Notifications'
   };
@@ -1103,6 +1725,11 @@
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = settings[key] !== false;
+      // Following only means anything while the eyes are drawn.
+      if (key === 'eyesFollow' && settings.eyes === false) {
+        input.disabled = true;
+        row.classList.add('off');
+      }
       input.addEventListener('change', async () => {
         try { settings = await window.islandAPI.setSetting(key, input.checked); }
         catch (_) { toast('Could not save setting'); }
@@ -1209,9 +1836,26 @@
       startFocus(Math.max(1, Number(button.dataset.preset) || 5) * 60);
     });
   });
-  $('homePlay').addEventListener('click', event => {
-    event.stopPropagation();
-    window.islandAPI.mediaControl('playPause');
+  $('todoList').addEventListener('click', event => {
+    const row = event.target.closest('.todo-item');
+    if (!row || !todoItems) return;
+    const id = Number(row.dataset.id);
+    todoItems = event.target.closest('.todo-x')
+      ? todoItems.filter(item => item.id !== id)
+      : todoItems.map(item => (item.id === id ? { ...item, done: !item.done } : item));
+    saveTodos();
+    renderTodos(true);
+  });
+  $('todoAdd').addEventListener('submit', event => {
+    event.preventDefault();
+    const input = $('todoInput');
+    const text = input.value.trim();
+    if (!text) return;
+    if (!todoItems) todoItems = loadTodos();
+    todoItems = [...todoItems, { id: Date.now(), text, done: false }];
+    input.value = '';
+    saveTodos();
+    renderTodos(true);
   });
   $('calPrev').addEventListener('click', event => {
     event.stopPropagation();
@@ -1236,17 +1880,32 @@
   });
   window.addEventListener('resize', () => { lyricFitKey = ''; fitLyric(); });
 
-  island.addEventListener('mouseenter', () => {
+  function openOnHover() {
     if (exiting || island.classList.contains('entering')) return;
     hovering = true;
     window.islandAPI.setInteractive(true);
     clearTimeout(hoverTimer);
+    cancelWarm();
     expand();
-  });
-  island.addEventListener('mouseleave', () => {
+  }
+  island.addEventListener('mouseenter', openOnHover);
+  // While a warm-up is running the island itself is invisible and not hit-testable, so the
+  // pill standing in for it carries the hover instead.
+  $('idleView').addEventListener('mouseenter', openOnHover);
+  function leaveIsland() {
     hovering = false;
     window.islandAPI.setInteractive(false);
-    hoverTimer = setTimeout(collapse, 380);
+    // Short grace period only: long enough to survive a jittery edge crossing, short
+    // enough that leaving the card reads as an instant repack (the morph itself is
+    // still --speed long). The old 380 ms stacked on top of the 360 ms morph and made
+    // closing feel like it lagged behind the pointer by more than half a second.
+    hoverTimer = setTimeout(collapse, 90);
+  }
+  island.addEventListener('mouseleave', () => {
+    // Moving the island out from under the pointer mid-slide would otherwise read as the
+    // pointer leaving the card and fold it up during the drag.
+    if (pointerDrag) return;
+    leaveIsland();
   });
   window.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
@@ -1259,6 +1918,10 @@
   window.islandAPI.on('activity:show', item => {
     if (item.type === 'media') {
       const incoming = { ...(item.data || {}) };
+      // The helper only ships artwork on the first tick of a track: keep the previous
+      // one so a several-hundred-KB base64 string is not copied across process
+      // boundaries (and re-parsed) several times a second.
+      if (!('art' in incoming)) incoming.art = mediaState?.art || activeMedia?.art || '';
       const sameTrack = activeTrackKey === trackKeyOf(incoming);
       if (sameTrack && mediaState) {
         const live = currentPosition();
@@ -1267,16 +1930,17 @@
         }
       }
       const key = trackKeyOf(incoming);
-      if (key !== activeTrackKey) {
+      const trackChanged = key !== activeTrackKey;
+      const wasPlaying = !!mediaState?.playing;
+      if (trackChanged) {
         activeTrackKey = key;
         displayedLyricIndex = -999;
         lastLyricLine = -999;
         lyrics = null;
-        // A new track should land on the player, unless the user is busy in another tool.
-        if (expanded && (cardView === 'home' || cardView === '')) setCardView('music');
       }
       mediaState = incoming;
       mediaAt = Date.now();
+      if (incoming.title && incoming.playing && (trackChanged || !wasPlaying)) focusMusicTab();
       if (item.data && item.data.lyrics !== undefined) lyrics = item.data.lyrics || null;
       if (lyrics && !lyrics.synced && !lyrics.plain) lyrics = null;
     } else if (item.type === 'media-ended') {
@@ -1297,6 +1961,7 @@
   // Idle eyes lean toward the pointer. Only active while idle (the main process
   // stops polling as soon as an activity takes over).
   window.islandAPI.on('cursor:position', point => {
+    if (settings.eyes === false || settings.eyesFollow === false) return;
     if (!island.classList.contains('idle') || !point) return;
     const view = $('idleView');
     const rect = view.getBoundingClientRect();
@@ -1309,23 +1974,144 @@
   });
   window.islandAPI.on('settings:updated', value => {
     settings = value || settings;
+    applyAnimationSpeed();
     applyDnd();
+    applyEyes();
     syncInstallLabel();
     if (cardView === 'customize' && expanded) renderCustomize();
   });
   window.islandAPI.getSettings()
-    .then(value => { settings = value || settings; applyDnd(); syncInstallLabel(); })
+    .then(value => { settings = value || settings; applyAnimationSpeed(); applyDnd(); applyEyes(); syncInstallLabel(); })
     .catch(() => {});
 
   /* ---------------- clocks ---------------- */
   window.islandAPI.getBattery().then(value => { battery = value; renderBatteryPill(); }).catch(() => {});
 
-  // Boot: drop in from above with a cute cue, then open the eyes.
-  playCue('enter');
-  island.addEventListener('animationend', event => {
-    if (event.animationName === 'islandEnter') finishEnter();
-  }, { once: true });
-  setTimeout(finishEnter, 820);
+  /* ---------------- cold-start warm-up ---------------- */
+  // A fresh process used to pay a one-time GPU cost inside the very first morph: D3D shader
+  // compilation for the card's rounded clip, artwork blend and glow, plus the card's first
+  // raster. So the real open runs at 1 % opacity with nothing visible, then snaps back to
+  // the pill. It runs twice, because the two costs are only paid once the window is in a
+  // different state:
+  //  • before the drop-in, while the window is still blank — compiles the pipelines (this
+  //    was the 1.2 s freeze the first hover used to have);
+  //  • after the drop-in, when the window has been shown and sized — the raster produced
+  //    here is the one the first real hover can reuse. A warm-up painted earlier is thrown
+  //    away by the window's first composition, which is why the first hover still stuttered.
+  // The island paints at 1 % while warming, so the idle pill is lifted out to #stage for the
+  // duration and put straight back (see .warming / .stage-pill in island.css).
+  const WARM_HOLD = 600;                  // long enough for the card's raster to land
+  let warm = null;
+  // The warm-up paints the whole expanded island, so the idle pill has to be taken out of
+  // it to stay on screen; it is put straight back when the warm-up ends.
+  const stage = document.getElementById('stage');
+  function liftPill() {
+    if (stageReplica) return;
+    // Idle: the eyes are moved out, so they keep standing still while the shell is hidden.
+    if (island.classList.contains('idle')) {
+      const view = $('idleView');
+      if (view.parentElement === stage) return;
+      view.classList.add('stage-pill');
+      stage.appendChild(view);
+      return;
+    }
+    // Any compact banner: a stand-in carrying the same classes paints exactly like the
+    // pill the user is looking at, without moving the live compact view out of the shell.
+    const replica = document.createElement('div');
+    replica.className = `island compact stage-replica${island.classList.contains('lyrics-line') ? ' lyrics-line' : ''}`;
+    if (island.dataset.kind) replica.dataset.kind = island.dataset.kind;
+    replica.appendChild($('compactView').cloneNode(true));
+    replica.addEventListener('mouseenter', openOnHover);
+    stage.appendChild(replica);
+    stageReplica = replica;
+  }
+  function dropPill() {
+    if (stageReplica) {
+      stageReplica.remove();
+      stageReplica = null;
+    }
+    const view = $('idleView');
+    if (view.parentElement !== stage) return;
+    view.classList.remove('stage-pill');
+    island.insertBefore(view, island.firstElementChild);
+  }
+  function warmCard({ veiled = false, done } = {}) {
+    if (expanded || hovering || exiting || warm) { done?.(); return; }
+    const run = { timer: 0, previousView: cardView };
+    warm = run;
+    warmKey = warmKeyNow();
+    island.classList.add('warming');
+    island.classList.toggle('veiled', veiled);
+    // Only the settled pass lifts the pill: before the drop-in nothing may be visible.
+    if (!veiled) liftPill();
+    // Jump straight to the card's final size: the morph is not what the warm-up needs and
+    // skipping it keeps the unseen open short.
+    island.style.transition = 'none';
+    // Timer first: the boot drop-in waits on this callback, so it has to run even if the
+    // throwaway open fails halfway through.
+    run.timer = setTimeout(() => {
+      if (warm !== run) return;
+      warm = null;
+      abortWarm(run);
+      done?.();
+      // The pre-entrance pass only has to compile the pipelines (measured under the morph),
+      // while the settled pass needs longer for the raster to be produced and kept.
+    }, veiled ? ANIM.morph + FALLBACK_SLACK : WARM_HOLD);
+    try { expand(); } catch (_) { /* the timer still cleans up and boots the entrance */ }
+  }
+  // Snaps the unseen card back to the pill and drops the warm-up styling. The warm-up must
+  // not decide where the first real open lands, so the pane the card was showing is put
+  // back; setCardView itself re-applies it on the next open.
+  function abortWarm(run) {
+    try {
+      island.style.transition = 'none';
+      collapse();                           // snap back, so no shrink is ever seen
+      cardView = run.previousView;
+      if (run.previousView) island.dataset.view = run.previousView;
+      else island.removeAttribute('data-view');
+    } finally {
+      island.classList.remove('warming', 'veiled');
+      dropPill();
+      void island.offsetHeight;
+      island.style.transition = '';
+    }
+  }
+  // A real hover arriving during a warm-up ends it early and opens normally instead.
+  function cancelWarm() {
+    if (!warm) return;
+    const run = warm;
+    warm = null;
+    clearTimeout(run.timer);
+    abortWarm(run);
+  }
+  // The card's content also changes while the island is at rest — a track starts, its
+  // artwork arrives, an activity lands. Those all paint something the warm-up has never
+  // seen, so the card is warmed again; the key keeps it to one pass per content change.
+  let warmKey = null;
+  function warmKeyNow() {
+    // Only what the card itself shows: the compact activity kind is left out so a volume
+    // key press or a timer does not trigger another pass.
+    return `${cardView || landingView()}|${(mediaState?.art || activeMedia?.art || '').length}`;
+  }
+  function scheduleWarmForContent() {
+    if (expanded || hovering || exiting || warm) return;
+    if (warmKeyNow() === warmKey) return;
+    warmCard();
+  }
+  // Boot: compile the card's pipelines unseen, then drop in from above with a cute cue.
+  warmCard({
+    veiled: true,
+    done: () => {
+      island.classList.add('entering');
+      // islandEnter (780 ms) finishing is the entrance completing; the fallback only covers
+      // a missed event, so it is generous enough (900 ms) never to cut the drop-in short.
+      onceAnimation(island, 'islandEnter', finishEnter, ANIM.enter + FALLBACK_SLACK);
+      // After the class, so building the AudioContext (several hundred ms on Windows) runs
+      // during the drop-in instead of holding it back.
+      playCue('enter');
+    }
+  });
+
   window.islandAPI.on('island:exit', playExit);
   window.islandAPI.on('update:status', renderUpdate);
   $('updateRestart')?.addEventListener('click', event => {
@@ -1333,13 +2119,38 @@
     window.islandAPI.installUpdate();
   });
 
+  // One short blink every few seconds instead of an endless animation: the idle pill stays
+  // completely still (and presents no frames) until it is time to blink.
+  function scheduleBlink() {
+    clearTimeout(blinkTimer);
+    blinkTimer = setTimeout(() => {
+      // Never blink over the entrance, a wake, an exit, or a card/banner: those either own
+      // the same .eye transform or have hidden the idle view entirely.
+      const busy = island.classList.contains('waking')
+        || island.classList.contains('entering')
+        || island.classList.contains('exiting');
+      if (!busy && island.classList.contains('idle') && !expanded) {
+        island.classList.add('blinking');
+        setTimeout(() => { island.classList.remove('blinking'); scheduleBlink(); }, ANIM.blink + 40);
+      } else {
+        scheduleBlink();
+      }
+    }, 3400 + Math.random() * 3800);
+  }
+  scheduleBlink();
+
   setInterval(() => {
     updateHeader();
+    // Nothing below this line applies without a track, and a paused player's clock does
+    // not move, so an idle island does no layout work on this tick at all.
+    if (!mediaState) return;
     if (lyrics?.synced) {
       if (cardView === 'lyrics') markLyricLines();
       if (manager.current?.type === 'media' && !expanded) showCurrentLyric();
     }
-    updateTimeline();
+    // The timeline lives in the music pane, so a collapsed island or another pane needs no
+    // layout here at all; opening the card refreshes it through updateCard.
+    if (mediaState.playing && expanded && cardView === 'music') updateTimeline();
   }, 250);
   setInterval(() => {
     updateHeader();

@@ -6,7 +6,7 @@
 </head>
 <body>
 <main id="stage">
-  <section id="island" class="island idle entering" aria-live="polite">
+  <section id="island" class="island idle" aria-live="polite">
 
     <div id="idleView" class="view idle-view" aria-label="Dyno is idle">
       <span class="eye"></span><span class="eye"></span>
@@ -36,9 +36,6 @@
           </button>
           <div class="head-date" id="headDate">MON 09 NOV</div>
         </div>
-        <div class="head-eyes" aria-hidden="true">
-          <span class="eye"></span><span class="eye"></span>
-        </div>
         <div class="head-right">
           <span class="battery-pill" id="headBattery" hidden>
             <svg class="bolt" id="headBatteryBolt" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M13.6 1.6 5.2 13.1h4.9L9.4 22.4l8.6-12.1h-5z"/></svg>
@@ -57,27 +54,111 @@
 
       <div class="card-body">
 
-        <!-- home ------------------------------------------------------- -->
-        <section class="view-pane home-pane" data-view="home">
-          <div class="home-top">
-            <b id="homeTime">--:--</b>
-            <span id="homeDate"></span>
-          </div>
-          <div class="home-now">
-            <img id="homeArt" class="home-art" alt="" hidden>
-            <div class="home-now-copy">
-              <small>NOW PLAYING</small>
-              <b id="homeTitle">Nothing playing</b>
-              <span id="homeArtist">Open a player to begin</span>
+        <!-- today ------------------------------------------------------ -->
+        <section class="view-pane today-pane" data-view="home">
+          <div class="today-grid">
+            <div class="today-col today-clock-col">
+              <div class="today-clock">
+                <div class="clock-time">
+                  <b id="todayHour">--</b><i class="clock-sep" aria-hidden="true">:</i><b id="todayMin">--</b>
+                </div>
+                <span id="todayDay"></span>
+              </div>
+              <article class="today-weather" id="weatherCard">
+                <span class="wx-icon" id="wxIcon" aria-hidden="true">☀</span>
+                <b id="wxTemp">—°</b>
+                <small id="wxDesc">Weather</small>
+              </article>
             </div>
-            <button class="round-btn" id="homePlay" aria-label="Play or pause">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path id="homePlayPath" d="M8 5l11 7-11 7z"/></svg>
-            </button>
+
+            <div class="today-col">
+              <article class="panel week-card">
+                <header><b>This week</b><span id="weekRange"></span></header>
+                <div class="week-strip" id="weekStrip"></div>
+                <div class="next-event empty" id="nextEvent">
+                  <i aria-hidden="true"></i>
+                  <div><small id="nextWhen">Next</small><b id="nextWhat">No events today</b></div>
+                </div>
+              </article>
+            </div>
+
+            <div class="today-col">
+              <article class="panel todo-card">
+                <header><b>Today</b><span class="todo-count" id="todoCount">0/0</span></header>
+                <div class="todo-list" id="todoList"></div>
+                <form class="todo-add" id="todoAdd">
+                  <input id="todoInput" maxlength="80" placeholder="Add a to-do..." autocomplete="off">
+                  <button type="submit" aria-label="Add to-do">→</button>
+                </form>
+              </article>
+            </div>
           </div>
-          <div class="home-chips">
-            <button class="chip" data-goto="calendar">Today</button>
-            <button class="chip" data-goto="timer">Start focus</button>
-            <button class="chip" data-goto="alerts">Notifications</button>
+        </section>
+
+        <!-- stats ------------------------------------------------------ -->
+        <section class="view-pane stats-pane" data-view="stats">
+          <div class="stats-grid">
+            <div class="stats-left">
+              <div class="stats-meters">
+                <article class="meter" data-metric="cpu" style="--m-arc:#e9b84e">
+                  <div class="dial">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <circle class="ring-bg" cx="32" cy="32" r="26"></circle>
+                      <circle id="cpuArc" class="arc" cx="32" cy="32" r="26"></circle>
+                    </svg>
+                    <b id="cpuPct">—</b>
+                  </div>
+                  <b class="meter-name">CPU</b>
+                  <small class="meter-sub" id="cpuName">—</small>
+                  <div class="meter-pills"><em id="cpuClock">—</em><em id="cpuProcs">—</em></div>
+                </article>
+                <article class="meter" data-metric="gpu" style="--m-arc:#b66bff">
+                  <div class="dial">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <circle class="ring-bg" cx="32" cy="32" r="26"></circle>
+                      <circle id="gpuArc" class="arc" cx="32" cy="32" r="26"></circle>
+                    </svg>
+                    <b id="gpuPct">—</b>
+                  </div>
+                  <b class="meter-name">GPU</b>
+                  <small class="meter-sub" id="gpuName">—</small>
+                  <div class="meter-pills"><em id="gpuVram">—</em></div>
+                </article>
+                <article class="meter" data-metric="ram" style="--m-arc:#58c98a">
+                  <div class="dial">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <circle class="ring-bg" cx="32" cy="32" r="26"></circle>
+                      <circle id="ramArc" class="arc" cx="32" cy="32" r="26"></circle>
+                    </svg>
+                    <b id="ramPct">—</b>
+                  </div>
+                  <b class="meter-name">RAM</b>
+                  <small class="meter-sub" id="ramUse">—</small>
+                  <div class="meter-pills"><em id="ramFree">—</em></div>
+                </article>
+              </div>
+              <div class="stats-foot">
+                <article class="foot-card">
+                  <small>DISK C:</small>
+                  <b id="diskUse">—</b>
+                  <i class="foot-bar"><i id="diskBar"></i></i>
+                </article>
+                <article class="foot-card">
+                  <small>NETWORK</small>
+                  <b><span id="netDown">—</span> <em>↓</em> <span id="netUp">—</span> <em>↑</em></b>
+                </article>
+                <article class="foot-card">
+                  <small>UP FOR</small>
+                  <b id="uptime">—</b>
+                </article>
+              </div>
+            </div>
+            <div class="stats-side">
+              <article class="panel top-apps">
+                <header><b>Top apps</b><span>RAM</span></header>
+                <div id="topApps"></div>
+              </article>
+            </div>
           </div>
         </section>
 
@@ -236,8 +317,11 @@
       <nav class="card-nav" aria-label="Island apps">
         <button class="nav-plus" id="navPlus" data-tip="App menu" aria-label="App menu">+</button>
         <div class="nav-icons">
-          <button class="nav-btn" data-goto="home" data-tip="Home" aria-label="Home">
+          <button class="nav-btn" data-goto="home" data-tip="Today" aria-label="Today">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.8 10.4 12 3.9l8.2 6.5V20h-5.4v-5.4H9.2V20H3.8z"/></svg>
+          </button>
+          <button class="nav-btn" data-goto="stats" data-tip="Stats" aria-label="Stats">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V10M9.3 19V4.6M14.7 19v-6.4M20 19V7.4"/></svg>
           </button>
           <button class="nav-btn" data-goto="lyrics" data-tip="Lyrics" aria-label="Lyrics">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.5 3.4l1.8 4.9 4.9 1.8-4.9 1.8-1.8 4.9-1.8-4.9-4.9-1.8 4.9-1.8z"/><path d="M18.2 14.8l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/></svg>
@@ -321,6 +405,7 @@
       <div class="toast" id="toast" hidden></div>
     </div>
 
+    <i class="drag-grip" aria-hidden="true"></i>
   </section>
 </main>
 <script src="island.js"></script>

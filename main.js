@@ -1,8 +1,7 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Store = require('electron-store');
-const si = require('systeminformation');
 
 const store = new Store({
   defaults: {
@@ -10,12 +9,13 @@ const store = new Store({
       media: true, lyrics: true, volume: true, brightness: true,
       battery: true, timer: true, notifications: true, bluetooth: true,
       startWithWindows: false, position: 'top-center', offsetY: 8, dnd: false,
-      animationSpeed: 1, launchHidden: false
+      eyes: true, eyesFollow: true,
+      animationSpeed: 1, launchHidden: false, dragHintSeen: false
     }
   }
 });
 const settings = () => store.get('settings');
-let islandWindow, settingsWindow, tray, media, volume, brightness, battery, notifications;
+let islandWindow, settingsWindow, tray, media, volume, brightness, battery, notifications, sysmon, stats;
 let mediaStopTimer = null, mediaStopped = false;
 let quitting = false;
 let allowQuit = false;
@@ -23,6 +23,10 @@ let exitStarted = false;
 let updater = null;
 let idleGazeEnabled = true;
 let gazeTimer = null;
+let lastGaze = null;
+// Horizontal offset of the island, kept in memory only: moving the island is a session
+// gesture, so quitting Dyno (or rebooting) puts it back at the top centre of the screen.
+let sessionX = 0;
 const demo = process.env.ISLAND_DEMO === '1';
 // Host window is larger than the island so the expanded card and its soft rim glow are not clipped.
 const WIN_W = 720, WIN_H = 420;
@@ -40,6 +44,9 @@ function createIsland() {
     hasShadow: false, show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      // The notes pane is the only editable field, and the spellchecker shipped with it
+      // costs tens of MB in the renderer for no benefit here.
+      spellcheck: false,
       contextIsolation: true, nodeIntegration: false, sandbox: true
     }
   });
@@ -61,10 +68,14 @@ function positionIsland() {
   const display = screen.getPrimaryDisplay();
   const bounds = display.bounds;
   const s = settings();
-  const x = Math.round(bounds.x + (bounds.width - WIN_W) / 2);
+  const maxX = Math.max(0, (bounds.width - WIN_W) / 2);
+  const shift = Math.max(-maxX, Math.min(maxX, Number(sessionX) || 0));
+  const x = Math.round(bounds.x + (bounds.width - WIN_W) / 2 + shift);
   const y = Math.max(bounds.y, bounds.y + Number(s.offsetY || 0));
   islandWindow.setBounds({ x, y, width: WIN_W, height: WIN_H });
-  islandWindow.setAlwaysOnTop(true, 'screen-saver');
+  // Re-asserting this on every slider step flickered the always-on-top window, so only
+  // restore it when something actually dropped it.
+  if (!islandWindow.isAlwaysOnTop()) islandWindow.setAlwaysOnTop(true, 'screen-saver');
 }
 function registerDisplayListeners() {
   screen.on('display-metrics-changed', positionIsland);
@@ -88,7 +99,7 @@ function createSettingsWindow() {
   settingsWindow = new BrowserWindow({
     width: 440, height: 600, title: 'Dyno Settings',
     resizable: false, autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'),
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), spellcheck: false,
       contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   settingsWindow.loadFile(path.join(__dirname, 'src/renderer/settings.html'));
@@ -143,6 +154,8 @@ function refreshTray() {
 }
 function setSetting(key, value) {
   store.set(`settings.${key}`, value);
+  // A stale pointer position would snap the eyes once gaze polling resumes.
+  if (key === 'eyes' || key === 'eyesFollow') lastGaze = null;
   if (key === 'startWithWindows') {
     app.setLoginItemSettings({ openAtLogin: !!value, path: app.getPath('exe'),
       args: value ? ['--hidden'] : [] });
@@ -151,18 +164,22 @@ function setSetting(key, value) {
   positionIsland();
   if (['media','lyrics','volume','brightness','battery','notifications'].includes(key)) {
     // Rebuild monitors after feature toggles so settings take effect immediately.
-    for (const mod of [media, volume, brightness, battery, notifications]) {
+    for (const mod of [sysmon, media, volume, brightness, battery, notifications]) {
       try { mod?.stop?.(); } catch (e) { log('settings-restart', e); }
     }
     startModules().catch(e => log('settings-restart', e));
   }
 }
 function setupIpc() {
-  ipcMain.on('island:idle-watch', (_e, enabled) => { idleGazeEnabled = !!enabled; });
+  ipcMain.on('island:idle-watch', (_e, enabled) => {
+    idleGazeEnabled = !!enabled;
+    lastGaze = null;
+  });
   ipcMain.on('island:interactive', (_e, enabled) => {
     if (islandWindow && !islandWindow.isDestroyed())
       islandWindow.setIgnoreMouseEvents(!enabled, { forward: true });
   });
+  ipcMain.on('island:position-x', (_e, value) => { sessionX = Number(value) || 0; positionIsland(); });
   ipcMain.on('island:activity', (_e, type, data, options) => showActivity(type, data, options));
   ipcMain.handle('settings:get', () => settings());
   ipcMain.handle('settings:set', (_e, key, value) => { setSetting(key, value); return settings(); });
@@ -190,13 +207,12 @@ function setupIpc() {
     await loudness.setMuted(!!muted);
     return !!muted;
   });
+  // Answered from the reader's last reading: querying the battery here used to start
+  // three PowerShell processes every time the card opened or the 60 s tick fired.
   ipcMain.handle('battery:get', async () => {
-    try {
-      const b = await si.battery();
-      if (!b.hasBattery) return null;
-      // A charge cap reports isCharging=false while the cable is connected; acConnected is the cable.
-      return { percent: Math.round(b.percent), charging: !!(b.acConnected || b.isCharging), minutes: Number(b.timeRemaining) || 0 };
-    } catch (error) { log('battery-read', error); return null; }
+    const reading = battery?.current;
+    if (!reading) return null;
+    return { percent: Math.round(reading.percent), charging: !!reading.charging, minutes: Number(reading.timeRemaining) || 0 };
   });
   ipcMain.handle('network:get', async () => {
     try { return await require('./src/main/network').readNetwork(); }
@@ -207,6 +223,17 @@ function setupIpc() {
     const pages = { wifi: 'ms-settings:network-wifi', bluetooth: 'ms-settings:bluetooth' };
     return shell.openExternal(pages[target] || 'ms-settings:network').then(() => true).catch(() => false);
   });
+  // The Stats card owns the sampler: it starts when the card opens and stops when it
+  // closes, so a closed card leaves no polling process behind.
+  ipcMain.handle('stats:start', () => {
+    if (!stats) {
+      const { StatsMonitor } = require('./src/main/stats');
+      stats = new StatsMonitor({ onUpdate: data => send('stats:update', data), onError: e => log('stats', e) });
+    }
+    stats.start();
+    return true;
+  });
+  ipcMain.handle('stats:stop', () => { stats?.stop(); return true; });
   ipcMain.handle('clipboard:write', (_e, text) => {
     require('electron').clipboard.writeText(String(text ?? '').slice(0, 4000));
     return true;
@@ -252,6 +279,7 @@ async function startModules() {
   const { BrightnessMonitor } = require('./src/main/brightness');
   const { BatteryMonitor } = require('./src/main/battery');
   const { NotificationServer } = require('./src/main/notifications');
+  const { SysMonitor } = require('./src/main/sysmon');
 
   clearTimeout(mediaStopTimer); mediaStopTimer = null; mediaStopped = false;
   const mediaEnded = () => {
@@ -285,14 +313,22 @@ async function startModules() {
     volume = new VolumeMonitor({ onChange: data => showActivity('volume', data, { duration: 1600, priority: 100 }), onError: e => log('volume', e) });
     volume.start();
   }
-  if (s.brightness) {
-    brightness = new BrightnessMonitor({ onChange: data => showActivity('brightness', data, { duration: 1600, priority: 95 }), onError: e => log('brightness', e) });
-    brightness.start();
-  }
-  if (s.battery) {
-    battery = new BatteryMonitor({ onChange: (type, data) => showActivity(type, data, { duration: type === 'battery-low' ? 5000 : 3600, priority: type === 'battery-low' ? 90 : 30 }), onError: e => log('battery', e) });
-    battery.start();
-  }
+  // Brightness and battery are both WMI readings, so they share one long-lived reader
+  // process. Two independent pollers here meant a PowerShell launch every 650 ms for
+  // brightness plus three more per battery poll, which is what made the desktop stutter.
+  brightness = new BrightnessMonitor({
+    onChange: data => showActivity('brightness', data, { duration: 1600, priority: 95 }),
+    onError: e => log('brightness', e)
+  });
+  battery = new BatteryMonitor({
+    onChange: (type, data) => showActivity(type, data, { duration: type === 'battery-low' ? 5000 : 3600, priority: type === 'battery-low' ? 90 : 30 }),
+    onError: e => log('battery', e)
+  });
+  sysmon = new SysMonitor({ brightness: !!s.brightness, battery: !!s.battery });
+  sysmon.on('brightness', value => brightness.push(value));
+  sysmon.on('battery', reading => battery.push(reading));
+  sysmon.on('error', e => log('sysmon', e));
+  if (s.brightness || s.battery) sysmon.start();
   if (s.notifications) {
     notifications = new NotificationServer({ onNotify: data => showActivity('notification', data, { duration: 3500, priority: 80 }), onError: e => log('notifications', e) });
     notifications.start();
@@ -319,18 +355,18 @@ async function runDemo() {
 
 app.whenReady().then(async () => {
   registerDisplayListeners();
-  // Windows tells us about cable changes instantly; WMI's 30 s poll is too slow and
-  // isCharging alone misses unplugs once a charge cap has stopped charging.
-  const pollBatterySoon = () => [1200, 4000].forEach(ms => setTimeout(
-    () => battery?.poll?.().catch(e => log('battery', e)), ms));
-  powerMonitor.on('on-ac', pollBatterySoon);
-  powerMonitor.on('on-battery', pollBatterySoon);
+  // Only report the pointer when it has actually moved. Sending on every tick kept the
+  // eyes (and with them the transparent overlay) animating forever; a still pointer now
+  // costs nothing.
   gazeTimer = setInterval(() => {
-    if (!idleGazeEnabled || !islandWindow || islandWindow.isDestroyed() || !islandWindow.isVisible()) return;
+    if (!idleGazeEnabled || settings().eyes === false || settings().eyesFollow === false) return;
+    if (!islandWindow || islandWindow.isDestroyed() || !islandWindow.isVisible()) return;
     const cursor = screen.getCursorScreenPoint();
+    if (lastGaze && Math.abs(cursor.x - lastGaze.x) < 3 && Math.abs(cursor.y - lastGaze.y) < 3) return;
+    lastGaze = cursor;
     const bounds = islandWindow.getBounds();
     send('cursor:position', { x: cursor.x - bounds.x, y: cursor.y - bounds.y });
-  }, 90);
+  }, 120);
   if (process.platform !== 'win32') console.warn('Windows features are best-effort on this platform.');
   createIsland(); makeTray(); setupIpc();
   updater = require('./src/main/updater').createUpdater({
@@ -345,7 +381,8 @@ app.whenReady().then(async () => {
 app.on('before-quit', e => {
   quitting = true;
   clearInterval(gazeTimer);
-  for (const mod of [media, volume, brightness, battery, notifications]) {
+  stats?.stop();
+  for (const mod of [sysmon, media, volume, brightness, battery, notifications]) {
     try { mod?.stop?.(); } catch (err) { log('cleanup', err); }
   }
   if (allowQuit) return;

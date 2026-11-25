@@ -60,9 +60,9 @@ npm run pack
 - **Activity manager:** renderer-side priority queue. Volume/brightness and critical alerts interrupt lower-priority items; queued items resume after the active item finishes.
 - **Now Playing:** Python `winsdk` helper reads the current Windows SMTC session and streams JSON lines. Play/pause, previous, next and seek commands are sent back to the helper. Works with players that publish SMTC metadata (Spotify, supported browsers, VLC when its SMTC integration is active).
 - **Lyrics:** LRCLIB `/api/get` then `/api/search`, with exact-match fallback, synced LRC parsing, plain-lyrics fallback, disk cache, and an on-demand lookup when the Lyrics button is pressed. Current/next lyric is updated at 200 ms intervals from the latest SMTC playback position.
-- **Volume:** `loudness` polls Windows master volume/mute. A change produces a transient HUD with a drawn speaker glyph (two sound arcs, or a dimmed speaker with an × and "Muted").
-- **Brightness:** best-effort WMI `WmiMonitorBrightness` polling. Unsupported external monitors/desktops silently stop polling after a logged warning.
-- **Battery:** `systeminformation` checks battery state every 30 seconds, and Electron's `powerMonitor` triggers an extra reading the moment the cable changes. "Plugged" is read from `acConnected` (falling back to `isCharging`), because a charge cap reports not-charging while the cable is still connected. Both directions of a charge transition (plugged in, unplugged) raise a banner, and 20%/10% low-battery thresholds are watched. The header pill draws a real gauge: outline plus a fill that matches the percentage, a pulsing bolt while plugged in, red under 20%, and a pop animation whenever the charge state flips.
+- **Volume:** `loudness` reads Windows master volume/mute about every 700 ms. Its Windows backend launches a helper executable for each reading, so volume and mute are requested in a single run instead of two. A change produces a transient HUD with a drawn speaker glyph (two sound arcs, or a dimmed speaker with an × and "Muted").
+- **Brightness:** best-effort WMI `WmiMonitorBrightness`, read by the shared system reader every 2 seconds. Windows offers no path to this reading without a PowerShell round-trip, so the reader keeps one process alive rather than starting one per reading; unsupported external monitors and desktops simply stop returning values.
+- **Battery:** the same shared reader reads `Win32_Battery` about every 6 seconds, so a cable change shows up within a few seconds and the reading costs no extra process. "Plugged" is decided from `BatteryStatus` (anything other than *discharging* means the cable is attached), because a charge cap reports not-charging while the cable is still connected. Both directions of a charge transition (plugged in, unplugged) raise a banner, and 20%/10% low-battery thresholds are watched. The header pill draws a real gauge: outline plus a fill that matches the percentage, a pulsing bolt while plugged in, red under 20%, and a pop animation whenever the charge state flips.
 - **Timer:** countdown can be started from the tray or expanded island prompt; timer state displays a compact countdown and ring.
 - **Notifications:** local HTTP API on `127.0.0.1:47831`. Windows notification listener is not used.
 - **Bluetooth:** intentionally disabled; no connected/disconnected device popups are shown.
@@ -126,7 +126,7 @@ Or push a tag that matches the version (`v1.0.1` for `"version": "1.0.1"`). `.gi
 1. **Native Windows runtime not verified in this source-generation environment.** Install and test on Windows. The app is configured for Windows packaging.
 2. SMTC requires `winsdk` and a media player that publishes a Windows media session. Some browser tabs or players do not expose controls/metadata.
 3. Windows SMTC thumbnail extraction varies by player and Windows build. If artwork is absent, the art tile remains a neutral placeholder.
-4. `loudness` and `systeminformation` rely on OS support. Volume polling is deliberately slower than key-event hooks to avoid global keyboard interception.
+4. `loudness` relies on OS support. Volume polling is deliberately slower than key-event hooks to avoid global keyboard interception.
 5. Brightness WMI is generally unavailable on desktop monitors; unsupported systems skip the feature.
 6. Bluetooth polling depends on PowerShell `Get-PnpDevice` and may show adapter/paired-device entries as well as audio devices.
 7. The local notification endpoint accepts loopback POSTs without authentication. Do not forward it to an untrusted network interface.
@@ -156,6 +156,7 @@ dynamic-island/
       volume.js
       brightness.js
       battery.js
+      sysmon.js
       notifications.js
       bluetooth.js
     renderer/

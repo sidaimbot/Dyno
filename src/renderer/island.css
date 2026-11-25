@@ -2,7 +2,9 @@
 :root{
   color-scheme:dark;
   --ease:cubic-bezier(.22,1,.36,1);
-  --speed:460ms;
+  /* Island expand/collapse morph: width, height and border-radius all follow it, and
+     island.js rewrites it as 360 ms ÷ settings.animationSpeed. */
+  --speed:360ms;
   --card:#0b0b0e;
   --stroke:#232329;
   --text:#fff;
@@ -13,6 +15,7 @@
   --tint-light:255,255,255;
   --red:#ff453a;
   --green:#3ad885;
+  --amber:#f0c14b;
   font-family:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI",Inter,system-ui,sans-serif;
 }
 [hidden]{display:none!important}
@@ -30,9 +33,13 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
     0 0 0 1px rgba(255,255,255,.04),
     0 10px 28px -12px rgba(0,0,0,.78),
     0 0 24px -6px rgba(210,214,225,.16);
+  /* Shape and size share one timeline: a radius that finished earlier made the
+     morph look like it stuttered at the end. */
   transition:width var(--speed) var(--ease),height var(--speed) var(--ease),
-    border-radius 380ms var(--ease),border-color 260ms ease,background 300ms ease,box-shadow 300ms ease;
-  will-change:width,height,transform,opacity;transform:translateZ(0);
+    border-radius var(--speed) var(--ease),border-color 260ms ease,background 300ms ease;
+  /* width/height are layout properties: will-change on them pinned a large layer (and
+     its memory) without ever making the morph cheaper against the compositor. */
+  transform:translateZ(0);
   transform-origin:50% 0%;
 }
 /* Drop in from above, then settle / expand into the idle pill */
@@ -70,15 +77,25 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
   /* Tight glow so light stays inside the pill */
   box-shadow:0 0 3px rgba(255,255,255,.55),0 0 8px rgba(198,224,255,.28);
   translate:var(--gx,0px) var(--gy,0px);transition:translate 160ms var(--ease);
-  animation:blink 6.4s var(--ease) infinite;transform-origin:center;will-change:transform}
+  transform-origin:center;will-change:transform}
 .eye::after{content:'';position:absolute;inset:0;border-radius:inherit;
   background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(255,255,255,0) 55%);opacity:.5}
+/* Blinking is a one-shot class toggle rather than an endless animation. A permanently
+   running animation kept this transparent, always-on-top window presenting 60 frames a
+   second forever, which held the GPU process at ~12% of a core and kept allocating frame
+   resources. Between blinks the island now presents no frames at all. */
+/* Settings → Eyes: the pair can be switched off, and it can be told to sit still instead of
+   leaning toward the pointer. */
+.island.eyes-off .eye{display:none}
+.island.eyes-static .eye{translate:0 0}
+.island.blinking .eye{animation:blink 440ms ease-in-out}
 @keyframes blink{
-  0%,38%,44%,100%{transform:scaleY(1)}
-  40%{transform:scaleY(.08)}
-  41.6%{transform:scaleY(1)}
-  42.6%{transform:scaleY(.12)}
-  43.2%{transform:scaleY(1)}
+  0%{transform:scaleY(1)}
+  42%{transform:scaleY(.08)}
+  58%{transform:scaleY(1)}
+  70%{transform:scaleY(.14)}
+  84%{transform:scaleY(1)}
+  100%{transform:scaleY(1)}
 }
 /* Cute wake: closed → open (with a tiny double-blink) when the island boots */
 .island.waking .eye{animation:wakeEyes 780ms var(--ease) both}
@@ -106,9 +123,15 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .compact-art{flex:none;width:42px;height:42px;border-radius:12px;object-fit:cover;background:#17171b;border:1px solid #232328}
 .compact-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;overflow:hidden}
 .compact-copy strong{font-size:14.5px;font-weight:650;letter-spacing:-.2px;line-height:18px;
-  min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  padding-right:2px}
 .compact-copy small{font-size:11px;line-height:14px;color:var(--muted);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Off-screen twin the compact lyric fitter measures, so trying candidate sizes never
+   touches the line on screen. max-content keeps it from being clipped by the pill. */
+.compact-copy .fit-measure{position:absolute;left:0;top:0;width:max-content;max-width:none;
+  visibility:hidden;pointer-events:none;overflow:visible;text-overflow:clip;white-space:nowrap;
+  font-weight:700;line-height:normal}
 .compact-bar{flex:1;min-width:0;height:9px;border-radius:999px;background:#28282e;overflow:hidden}
 .compact-bar i{display:block;height:100%;width:0;border-radius:inherit;
   background:linear-gradient(90deg,#dcdce3,#fff);transition:width 340ms var(--ease)}
@@ -118,7 +141,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .compact-right .bolt{font-size:17px;line-height:1}
 
 .wave{height:26px;display:flex;align-items:center;gap:4px}
-.wave i{display:block;width:3px;height:8px;border-radius:2px;
+.wave i{display:block;width:3px;height:20px;border-radius:2px;transform:scaleY(.25);transform-origin:center;
   background:linear-gradient(180deg,rgba(var(--tint-light),1),rgba(var(--tint),1));
   box-shadow:0 0 4px rgba(var(--tint),.35);animation:wave 820ms ease-in-out infinite alternate}
 .wave i:nth-child(2){animation-duration:1.06s;animation-delay:-.24s}
@@ -127,29 +150,39 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .wave i:nth-child(5){animation-duration:.94s;animation-delay:-.36s}
 .wave i:nth-child(6){animation-duration:1.12s;animation-delay:-.6s}
 .wave i:nth-child(7){animation-duration:.8s;animation-delay:-.28s}
-.wave.paused i{animation:none;height:7px;opacity:.38}
-@keyframes wave{from{opacity:.5;height:5px}to{opacity:1;height:20px}}
+.wave.paused i{animation:none;transform:scaleY(.35);opacity:.38}
+/* Scale a fixed-height bar instead of animating height: transforms run on the
+   compositor, while height forced a layout pass across all seven bars every frame. */
+@keyframes wave{from{opacity:.5;transform:scaleY(.25)}to{opacity:1;transform:scaleY(1)}}
 
 /* media pill: artwork + one bold lyric line + level bars */
-.island.compact[data-kind="media"]{width:460px;height:56px;border-radius:24px;
-  border-color:rgba(var(--tint),.42);
+/* Wider than before so a lyric line can sit at a readable size, and a neutral hairline
+   instead of a tinted one: a coloured 1px ring plus the extra zero-spread shadow ring read
+   as a doubled, ragged edge. The tint now only glows, it no longer draws the outline. */
+.island.compact[data-kind="media"]{width:540px;height:58px;border-radius:27px;
+  border-color:rgba(255,255,255,.075);
   background:
     radial-gradient(58% 170% at 10% 50%,rgba(var(--tint),.44) 0%,rgba(var(--tint),.17) 46%,rgba(0,0,0,0) 76%),
     radial-gradient(130% 220% at 100% 130%,rgba(var(--tint),.2),rgba(0,0,0,0) 62%),
     linear-gradient(100deg,#131313 0%,#0b0b0b 55%,#060606 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.07),
-    0 0 0 1px rgba(255,255,255,.04),
+    inset 0 1px 0 rgba(255,255,255,.06),
     0 12px 30px -14px rgba(0,0,0,.8),
-    0 0 22px -8px rgba(var(--tint),.28)}
-.island.compact[data-kind="media"] .compact-view{gap:14px;padding:0 20px}
+    0 0 22px -8px rgba(var(--tint),.24)}
+.island.compact[data-kind="media"] .compact-view{gap:16px;padding:0 22px}
 .island.compact[data-kind="media"] .compact-copy{gap:0;align-items:center;text-align:center}
-.island.compact[data-kind="media"] .compact-copy strong{font-size:15px}
-.island.compact[data-kind="media"] .compact-art{width:44px;height:44px;border-radius:13px;
-  border-color:rgba(var(--tint),.55)}
+.island.compact[data-kind="media"] .compact-copy strong{font-size:15.5px}
+.island.compact[data-kind="media"] .compact-art{width:46px;height:46px;border-radius:14px;
+  border-color:rgba(255,255,255,.1)}
 .island.compact[data-kind="media"].lyrics-line #compactSubtitle{display:none}
-.island.compact[data-kind="media"].lyrics-line .compact-copy strong{font-size:16.5px;font-weight:700;
-  letter-spacing:-.35px;line-height:20px;color:#fff}
+.island.compact[data-kind="media"].lyrics-line .compact-copy strong{font-size:19px;font-weight:700;
+  letter-spacing:-.4px;line-height:23px;color:#fff}
+/* A paragraph-long line that not even the smallest readable size can hold: it now runs
+   left-aligned and fades out at the pill's edge, instead of being clipped on both sides by
+   the centred layout. Short lines keep their centred look. */
+.island.compact[data-kind="media"].lyrics-long .compact-copy strong{width:100%;text-align:left;
+  text-overflow:clip;padding-right:0;
+  mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
 
 /* volume / brightness banner */
 .island.compact[data-kind="volume"],.island.compact[data-kind="brightness"]{width:390px;height:52px;border-radius:0 0 26px 26px}
@@ -179,11 +212,13 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .compact-icon .batt-lg .shell{fill:none;stroke:currentColor;stroke-width:1.3;opacity:.5}
 .compact-icon .batt-lg .fill{fill:currentColor}
 .compact-icon .batt-lg .tip{fill:currentColor;opacity:.5}
+/* The glow and the bolt used to pulse forever while charging, and animating a
+   box-shadow / drop-shadow repaints the banner every frame. The tile keeps a static
+   glow and the bolt keeps a transform-and-opacity pulse that stays composited. */
 .island.compact[data-kind="charging"] .compact-icon{border-color:rgba(58,216,133,.5);
-  box-shadow:0 0 18px rgba(58,216,133,.28);animation:chargeGlow 1.9s ease-in-out infinite}
+  box-shadow:0 0 18px rgba(58,216,133,.3)}
 .island.compact[data-kind="charging"] .compact-right .bolt{color:var(--green);
-  filter:drop-shadow(0 0 6px rgba(58,216,133,.85));animation:boltPulse 1.9s ease-in-out infinite}
-@keyframes chargeGlow{0%,100%{box-shadow:0 0 12px rgba(58,216,133,.18)}50%{box-shadow:0 0 22px rgba(58,216,133,.42)}}
+  animation:boltPulse 1.9s ease-in-out infinite}
 
 /* timer */
 .island.compact[data-kind="timer"],.island.compact[data-kind="timer:prompt"]{width:290px;height:52px}
@@ -196,10 +231,43 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
     inset 0 1px 0 rgba(255,255,255,.06),
     0 0 0 1px rgba(255,255,255,.05),
     0 18px 42px -18px rgba(0,0,0,.85),
-    0 0 36px -4px rgba(190,194,210,.22),
-    0 0 64px -18px rgba(160,168,190,.12);
+    0 0 30px -4px rgba(190,194,210,.22);
 }
-.expanded-view{position:relative;display:flex;flex-direction:column;height:100%}
+/* The card keeps its final size no matter how wide the shell currently is, and lives on
+   its own compositing layer. Previously the shell animated width/height with the card as
+   a normal child, so every frame re-laid-out and re-rastered the whole card (12 nav
+   buttons with drop-shadow filters, 12 panes, four blurred shadows) — that raster work
+   was the stall, not the morph itself. Now the shell only paints its own rounded
+   background while the card, already rasterised once, is just clipped into view. */
+.expanded-view{position:absolute;top:0;right:auto;bottom:auto;left:50%;
+  width:640px;height:294px;margin-left:-320px;
+  display:flex;flex-direction:column;
+  will-change:transform,opacity}
+/* Display:none cannot transition, so the card used to appear fully opaque on the first
+   frame of the grow. Fading it in once the shell is mostly open reads as one motion. */
+/* The card opens with the shell instead of after it: both the delay and the fade are a
+   fraction of --speed, so the content lands just before the morph settles (at 360 ms:
+   101 ms delay + 198 ms fade = 299 ms) and stays in step when animationSpeed is raised. */
+.island.expanded .expanded-view{animation:cardIn calc(var(--speed) * .55) var(--ease) calc(var(--speed) * .28) both}
+@keyframes cardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+/* Boot warm-up: a fresh process paid a one-time GPU cost inside the first morph — D3D
+   shader compilation for the card's rounded clip, artwork blend and glow, plus the card's
+   first raster — so the first open stuttered while every later one was smooth. island.js
+   runs the real open and collapse once with this class on, at 1 % opacity.
+   The shell keeps painting its real expanded look and the card's cardIn animation still
+   runs exactly as it does on a real open: suppressing either one makes the raster belong
+   to a different layer state, and the first hover then pays for it again. The idle pill is
+   moved out to #stage for the duration so it stays on screen (see .stage-pill). */
+.island.warming{opacity:.01;pointer-events:none!important}
+.island.warming .idle-view{display:none!important}
+/* The idle pill itself, standing still in its usual spot while the island is warmed. */
+.stage-pill{
+  position:absolute;inset:0 auto auto 50%;width:104px;height:36px;margin-left:-52px;
+  display:flex;align-items:center;justify-content:center;gap:11px;
+  overflow:hidden;border-radius:999px;background:#000;border:1px solid #1b1b1f;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px rgba(255,255,255,.04),
+    0 10px 28px -12px rgba(0,0,0,.78),0 0 24px -6px rgba(210,214,225,.16);
+  opacity:1!important;transform:none!important;z-index:2}
 .card-art,.card-art-ph{position:absolute;left:0;top:0;bottom:0;width:287px;height:100%;object-fit:cover;
   background:#141418;z-index:0}
 .card-art-ph{display:grid;place-items:center;font-size:34px;color:#4c4c55;
@@ -209,7 +277,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .island.expanded:not([data-view="music"]) .card-art,
 .island.expanded:not([data-view="music"]) .card-art-ph,
 .island.expanded:not([data-view="music"]) .card-art-fade{display:none}
-.card-head{position:relative;z-index:3;display:grid;grid-template-columns:1fr auto 1fr;
+.card-head{position:relative;z-index:3;display:grid;grid-template-columns:1fr auto;
   align-items:center;gap:10px;flex:none;height:48px;padding:0 14px 0 20px}
 .head-left{display:flex;align-items:center;gap:10px;min-width:0;justify-self:start}
 .net-pill{display:flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:999px;
@@ -221,19 +289,32 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .net-pill[data-wifi="off"] .net-wifi{opacity:.34}
 .net-pill[data-bt="off"] .net-bt{opacity:.34}
 .net-pill:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.18)}
-/* Music card: date on art, eyes centered in the right panel, status on the far right */
+/* Music card: date on art, position slider centered in the right panel, status on the far right */
 .island.expanded[data-view="music"] .net-pill{display:none}
-.island.expanded[data-view="music"] .card-head{grid-template-columns:287px 1fr auto;padding-left:0}
+.island.expanded[data-view="music"] .card-head{grid-template-columns:287px 1fr;padding-left:0}
 .island.expanded[data-view="music"] .head-left{padding-left:20px}
 .head-date{font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#fff;
   text-shadow:0 1px 12px rgba(0,0,0,.7)}
-.head-eyes{display:flex;align-items:center;justify-content:center;gap:5px;pointer-events:none;
-  justify-self:center;grid-column:2}
-.head-eyes .eye{width:7px;height:10px;border-radius:3.4px;
-  box-shadow:0 0 2px rgba(255,255,255,.55),0 0 6px rgba(198,224,255,.25);
-  /* Keep header eyes from inheriting the idle gaze translate */
-  translate:0 0}
-.head-right{display:flex;align-items:center;gap:10px;justify-self:end;grid-column:3}
+/* Double-tap the dyno and slide to move it along the top edge. A grab cursor on the island's
+   own surface and the handle at its top edge are the standing cues that it can be picked
+   up; controls keep the cursor that belongs to them. */
+.island{cursor:grab}
+.island button,.island input{cursor:pointer}
+.island textarea,.island input:not([type]),.island input[type="text"],
+.island [contenteditable]{cursor:text}
+/* The grabbing cursor covers the whole island while that gesture runs, whatever child it is
+   over. */
+.island.moving,.island.moving *{cursor:grabbing!important;user-select:none}
+/* Sheet-style handle: the visible half of the cue, sitting in the empty strip above the
+   content of every mode - idle pill, compact pill and open card alike - so the gesture
+   reads without hovering to find the grab cursor. It is painted after the views, cannot
+   swallow a press, and the pill keeps it at the same spot while it morphs. */
+.drag-grip{position:absolute;left:50%;top:5px;transform:translateX(-50%);width:26px;height:3px;
+  border-radius:999px;background:rgba(255,255,255,.34);pointer-events:none}
+/* The idle pill is only 36 px tall: the same 26 px handle lowered onto the eyes, so it
+   shrinks and climbs to the top edge there, where it leaves the eyes clear. */
+.island.idle .drag-grip{top:3px;width:20px;background:rgba(255,255,255,.3)}
+.head-right{display:flex;align-items:center;gap:10px;justify-self:end;grid-column:2}
 .battery-pill{display:flex;align-items:center;gap:4px;height:22px;padding:0 9px 0 7px;border-radius:999px;
   background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);color:#e9e9ef;
   font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
@@ -243,7 +324,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .battery-pill .fill{fill:currentColor;transition:width 420ms var(--ease)}
 .battery-pill .tip{fill:currentColor;opacity:.5}
 .battery-pill .bolt{width:9px;height:12px;flex:none;fill:currentColor;
-  filter:drop-shadow(0 0 3px rgba(78,227,154,.7));animation:boltPulse 1.9s ease-in-out infinite}
+  animation:boltPulse 1.9s ease-in-out infinite}
 .battery-pill[data-state="charging"]{color:#4ee39a;background:rgba(58,216,133,.16);border-color:rgba(58,216,133,.34)}
 .battery-pill[data-state="charging"] .batt{display:none}
 .battery-pill[data-state="low"]{color:#ff7a72;background:rgba(255,69,58,.14);border-color:rgba(255,69,58,.32)}
@@ -322,6 +403,12 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
   transition:color .2s,font-size .2s}
 .lyric-line.past{color:#45454d}
 .lyric-line.current{color:#fff;font-size:19px;font-weight:780;letter-spacing:-.4px}
+.lyric-line.plain{padding:0 2px 8px;color:#a9a9b5;line-height:1.45;white-space:pre-wrap;
+  overflow-wrap:break-word;transition:none}
+/* Long songs flow into two columns so the type can stay readable rather than shrinking to
+   a size nobody can read. `.two-col` is toggled by the fitter in island.js. */
+.lyric-line.plain.two-col{column-count:2;column-gap:24px;column-fill:balance;
+  column-rule:1px solid rgba(255,255,255,.07);padding-right:2px}
 .lyrics-empty{display:grid;place-items:center;height:100%;font-size:12px;color:#6a6a74;text-align:center}
 
 /* timer pane */
@@ -446,29 +533,116 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;
   border-radius:11px;background:#121216;border:1px solid #1d1d23;font-size:12px;font-weight:600;color:#dcdce4}
 .toggle-row input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+.toggle-row.off{opacity:.45}
+.toggle-row.off input{cursor:default}
 
-/* home */
-.home-pane{gap:14px;justify-content:center}
-.home-top{display:flex;align-items:baseline;gap:12px}
-.home-top b{font-size:52px;font-weight:800;letter-spacing:-2.4px;line-height:1;font-variant-numeric:tabular-nums}
-.home-top span{font-size:12.5px;font-weight:600;color:#8b8b96}
-.home-now{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:16px;
-  background:#121216;border:1px solid #1d1d23}
-.home-art{width:44px;height:44px;border-radius:12px;object-fit:cover;background:#1a1a20;border:1px solid #26262c;flex:none}
-.home-now-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.home-now-copy small{font-size:8.5px;letter-spacing:1.5px;font-weight:650;color:#71717b}
-.home-now-copy b{font-size:13.5px;font-weight:750;letter-spacing:-.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.home-now-copy span{font-size:11px;color:#8f8f99;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.round-btn{flex:none;width:34px;height:34px;border-radius:50%;border:0;background:#fff;color:#08080a;
-  display:grid;place-items:center;cursor:pointer;padding:0}
-.round-btn svg{width:11px;height:11px;fill:currentColor}
-.home-chips{display:flex;gap:8px;flex-wrap:wrap}
+/* ---------- today ---------- */
+.today-pane{gap:0}
+.today-grid{flex:1;min-height:0;display:grid;grid-template-columns:150px minmax(0,1fr) 208px;gap:9px}
+.today-col{display:flex;flex-direction:column;gap:9px;min-width:0;min-height:0}
+.today-clock{flex:none;display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:6px 2px 0}
+.clock-time{display:flex;align-items:center;gap:1px}
+.today-clock b{font-size:56px;font-weight:800;letter-spacing:-3px;line-height:1;font-variant-numeric:tabular-nums}
+.clock-sep{font-style:normal;font-size:44px;font-weight:700;line-height:1;color:#9c9ca7;margin:0 1px}
+.today-clock span{font-size:9.5px;font-weight:650;letter-spacing:.6px;color:#8b8b96;text-transform:uppercase}
+.today-weather{flex:1;min-height:0;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;
+  padding:12px 13px;border-radius:15px;background:#131317;border:1px solid #1f1f25}
+.wx-icon{font-size:22px;line-height:1;color:var(--amber)}
+.today-weather b{font-size:26px;font-weight:750;letter-spacing:-1px;line-height:1.12}
+.today-weather small{font-size:9.5px;color:#8b8b96;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.panel{border-radius:15px;background:#131317;border:1px solid #1f1f25;min-height:0;display:flex;flex-direction:column;padding:7px 9px}
+.week-card{flex:1;gap:10px;padding:13px 12px}
+.week-card header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.week-card header b{font-size:12px;font-weight:750;letter-spacing:-.1px}
+.week-card header span{font-size:8.5px;color:#7a7a85;font-weight:650;white-space:nowrap}
+.week-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.week-day{display:flex;flex-direction:column;align-items:center;gap:5px;border-radius:8px;min-width:0}
+.week-day small{font-size:8.5px;color:#7b7b85;font-weight:650}
+.week-day b{width:26px;height:26px;display:grid;place-items:center;border-radius:8px;font-size:11.5px;font-weight:700;color:#e3e3e9}
+.week-day.today b{background:var(--amber);color:#191103;font-weight:800}
+.next-event{flex:1;min-height:0;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:11px;background:#1a1a20}
+.next-event i{flex:none;width:2px;height:26px;border-radius:2px;background:#e0609a}
+.next-event.empty i{background:#3a3a42}
+.next-event div{min-width:0}
+.next-event small{display:block;font-size:8px;color:#8b8b96;font-weight:650}
+.next-event b{display:block;font-size:11px;font-weight:700;color:#e9e9ef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.todo-card{flex:1;gap:6px}
+.todo-card header{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.todo-card header b{font-size:11.5px;font-weight:750}
+.todo-count{min-width:21px;height:21px;padding:0 5px;border-radius:50%;display:grid;place-items:center;
+  background:var(--amber);color:#191103;font-size:8px;font-weight:800;font-variant-numeric:tabular-nums}
+.todo-list{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:5px;scrollbar-width:none}
+.todo-empty{font-size:9.5px;color:#6c6c76;padding:6px 2px;line-height:1.55}
+.todo-item{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:9px;
+  background:#1b1b21;border:1px solid #24242b;cursor:pointer;min-width:0}
+.todo-item:hover{background:#202027}
+.todo-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#7ee2a8}
+.todo-item span{flex:1;min-width:0;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.todo-item.done span{color:#6f6f79;text-decoration:line-through}
+.todo-item.done .todo-dot{background:#3a3a42}
+.todo-x{flex:none;border:0;background:none;color:#6f6f79;font-size:11px;line-height:1;cursor:pointer;padding:0 1px;opacity:0}
+.todo-item:hover .todo-x{opacity:1}
+.todo-x:hover{color:#ff7a72}
+.todo-add{flex:none;display:flex;gap:4px;align-items:center;padding:3px 4px 3px 9px;border-radius:9px;
+  border:1px solid #26262d;background:#16161b}
+.todo-add input{flex:1;min-width:0;border:0;background:none;color:#ececf2;font:inherit;font-size:10px;outline:none;height:22px;padding:0}
+.todo-add input::placeholder{color:#65656f}
+.todo-add button{flex:none;width:20px;height:20px;border:0;border-radius:7px;background:var(--amber);color:#191103;
+  font:inherit;font-size:11px;font-weight:800;cursor:pointer;padding:0;line-height:1}
+
+/* ---------- stats ---------- */
+.stats-pane{gap:0}
+.stats-grid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:9px}
+.stats-left{display:flex;flex-direction:column;gap:9px;min-height:0}
+.stats-meters{flex:1;min-height:0;display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.meter{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:8px 8px;
+  border-radius:15px;background:#131317;border:1px solid #1f1f25;min-width:0}
+.dial{position:relative;width:56px;height:56px;display:grid;place-items:center;margin-bottom:2px}
+.dial svg{position:absolute;inset:0;transform:rotate(-90deg)}
+.dial circle{fill:none;stroke-width:4.5}
+.dial .ring-bg{stroke:#26262d}
+.dial .arc{stroke:var(--m-arc,var(--amber));stroke-linecap:round;stroke-dasharray:163.4;stroke-dashoffset:0;
+  transition:stroke-dashoffset .45s var(--ease)}
+.dial b{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
+.meter-name{font-size:10.5px;font-weight:750}
+.meter-sub{font-size:8px;color:#7c7c87;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center}
+.meter-pills{display:flex;gap:4px;margin-top:3px;max-width:100%}
+.meter-pills[hidden]{display:none}
+.meter-pills em{font-style:normal;padding:2px 6px;border-radius:6px;background:#1d1d23;
+  font-size:7.5px;font-weight:700;color:#c9c9d3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stats-foot{flex:none;display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}
+.foot-card{padding:8px 10px;border-radius:12px;background:#131317;border:1px solid #1f1f25;
+  min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}
+.foot-card small{font-size:8px;letter-spacing:.9px;color:#6e6e78;font-weight:700}
+.foot-card b{font-size:10.5px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.foot-card em{font-style:normal;color:#8b8b96;font-weight:600}
+.foot-bar{display:block;height:4px;border-radius:2px;background:#26262d;overflow:hidden;margin-top:2px}
+.foot-bar i{display:block;height:100%;width:0;border-radius:inherit;background:var(--amber);transition:width .45s var(--ease)}
+.stats-side{display:flex;flex-direction:column;gap:9px;min-height:0}
+.top-apps{flex:1;gap:9px;padding:11px 11px 12px}
+.top-apps header{display:flex;justify-content:space-between;align-items:center;gap:6px;line-height:1}
+.top-apps header b{font-size:9.5px;font-weight:700;color:#9a9aa6;letter-spacing:.2px;white-space:nowrap}
+.top-apps header span{font-size:8.5px;color:#6e6e78;font-weight:650}
+.app-row{display:grid;grid-template-columns:13px minmax(0,1fr) auto;align-items:center;gap:3px 7px;padding:0}
+.app-ico{width:13px;height:13px;border-radius:5px;display:grid;place-items:center;
+  font-size:7.5px;font-weight:800;color:#0d0d10;background:var(--amber)}
+#topApps{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:space-between;gap:4px}
+.app-row b{font-size:9.5px;line-height:1.2;font-weight:650;color:#dcdce4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app-mb{font-size:9px;font-variant-numeric:tabular-nums;color:#9a9aa6;font-weight:650;justify-self:end}
+.app-track{grid-column:2 / 4;height:4px;border-radius:2px;background:#24242b;overflow:hidden}
+.app-track i{display:block;height:100%;background:#58c98a;border-radius:inherit;width:0}
+
+/* Replica of a compact pill on #stage while the card is warmed up: the warming island is
+   invisible, so the pill the user is hovering has to stay on screen. It reuses the normal
+   .island.compact rules by carrying the same classes and a snapshot of the compact view. */
+.stage-replica{position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:2;
+  transition:none;animation:none;opacity:1!important}
 
 /* ---------- bottom app bar ---------- */
 .card-nav{position:relative;z-index:3;display:flex;align-items:center;gap:8px;flex:none;
   height:56px;padding:0 16px 12px 18px}
 .nav-plus{flex:none;width:28px;height:28px;display:grid;place-items:center;border-radius:50%;
-  border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.1);backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.1);
   color:#fff;font-size:17px;font-weight:400;line-height:1;cursor:pointer;padding:0 0 1px;
   transition:background .16s,border-color .16s,transform .16s}
 .nav-plus:hover{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.45)}
@@ -485,7 +659,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .nav-btn.active{color:#fff;background:rgba(255,255,255,.14)}
 .nav-volume{flex:none}
 .nav-music{width:auto;display:flex;align-items:center;gap:7px;padding:0 12px;height:28px;
-  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.16);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.16);
   color:#fff;border-radius:999px;font-size:9.5px;font-weight:800;letter-spacing:1.35px;text-transform:uppercase;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 4px 12px rgba(0,0,0,.3)}
 .nav-music svg{width:12px;height:12px}
@@ -502,12 +676,15 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
   box-shadow:0 8px 20px rgba(0,0,0,.45)}
 
 /* ---------- app menu popover (compact) ---------- */
-.card-head,.card-body,.card-nav{transition:opacity .2s ease,filter .2s ease}
-.island.menu-open .card-head,.island.menu-open .card-body,.island.menu-open .card-nav{opacity:.14;filter:blur(2px)}
+/* The card used to blur behind the menu while the menu itself blurred its backdrop,
+   which made the 180 ms pop cost ~370 ms of dropped frames. At 97% opacity the popover's
+   backdrop blur was invisible anyway, so both are gone and the dim is plain opacity. */
+.card-head,.card-body,.card-nav{transition:opacity .2s ease}
+.island.menu-open .card-head,.island.menu-open .card-body,.island.menu-open .card-nav{opacity:.14}
 .menu-pop{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;
   width:348px;height:calc(100% - 18px);max-width:calc(100% - 18px);
   display:flex;flex-direction:column;gap:10px;padding:11px;border-radius:22px;border:1px solid #24242b;
-  background:rgba(16,16,20,.97);backdrop-filter:blur(22px) saturate(1.15);
+  background:rgba(16,16,20,.97);
   box-shadow:0 28px 60px -22px rgba(0,0,0,.9);animation:pop-in 180ms var(--ease)}
 @keyframes pop-in{from{opacity:0;transform:translate(-50%,-50%) scale(.975)}
   to{opacity:1;transform:translate(-50%,-50%)}}

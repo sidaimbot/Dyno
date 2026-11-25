@@ -38,6 +38,7 @@ class MediaBridge {
     this.onUpdate = onUpdate; this.onError = onError; this.demo = demo;
     this.child = null; this.buffer = ''; this.lastTrackKey = '';
     this.lastData = null; this.lastRaw = null; this.stopped = false; this.trackGeneration = 0; this.lastLyrics = null;
+    this.forwarded = null;
   }
   start() {
     if (this.demo || process.platform !== 'win32') {
@@ -97,6 +98,7 @@ class MediaBridge {
           if (this.lastTrackKey) {
             this.lastTrackKey = '';
             this.lastLyrics = null;
+            this.forwarded = null;
             this.trackGeneration++;
             this.onUpdate({ ...data, ended: true, lyrics: null });
           }
@@ -106,6 +108,7 @@ class MediaBridge {
         if (key !== this.lastTrackKey) {
           this.lastTrackKey = key;
           this.lastLyrics = null; // Never carry lyrics over from the previous track.
+          this.forwarded = this.forwardState(data);
           const generation = ++this.trackGeneration;
           this.onUpdate({ ...data, lyrics: null });
           this.getLyrics(data).then(lyrics => {
@@ -114,11 +117,36 @@ class MediaBridge {
               this.onUpdate({ ...this.withLivePosition(this.lastRaw || data), lyrics });
             }
           }).catch(this.onError);
-        } else {
+        } else if (this.shouldForward(data)) {
+          this.forwarded = this.forwardState(data);
           this.onUpdate({ ...data, lyrics: this.lastLyrics });
         }
       } catch (e) { this.onError(e); }
     }
+  }
+  forwardState(data) {
+    return {
+      position: Number(data.position) || 0,
+      playing: !!data.playing,
+      at: Date.now(),
+      duration: Math.round(Number(data.duration) || 0)
+    };
+  }
+  // The helper ticks every 350 ms, but a steady track only repeats the position it already
+  // reported. The renderer projects the position from its own clock, so forwarding those
+  // ticks bought nothing and cost a full activity re-render in the renderer three times a
+  // second. Only a state change, or a position that no longer matches the projection (a
+  // seek, or a player that stalled), is worth the IPC message.
+  shouldForward(data) {
+    const previous = this.forwarded;
+    if (!previous) return true;
+    if (!!data.playing !== previous.playing) return true;
+    // The album is not compared: a track is identified by title/artist/source both here and
+    // in the renderer, so an album-only change refetches nothing and repaints nothing.
+    // The duration is, because some players report it only once playback has started.
+    if (Math.round(Number(data.duration) || 0) !== previous.duration) return true;
+    const projected = previous.position + (previous.playing ? (Date.now() - previous.at) / 1000 : 0);
+    return Math.abs((Number(data.position) || 0) - projected) > 1.2;
   }
   async getLyrics(track) {
     if (!track?.title || !track?.artist) return null;

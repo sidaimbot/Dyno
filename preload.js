@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('islandAPI', {
   on: (channel, callback) => {
-    const allowed = ['activity:show', 'settings:updated', 'cursor:position', 'island:exit', 'update:status'];
+    const allowed = ['activity:show', 'settings:updated', 'cursor:position', 'island:exit', 'update:status', 'stats:update'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, data) => callback(data);
     ipcRenderer.on(channel, listener);
@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('islandAPI', {
   exitDone: () => ipcRenderer.send('island:exit-done'),
   setInteractive: enabled => ipcRenderer.send('island:interactive', !!enabled),
   setIdleWatch: enabled => ipcRenderer.send('island:idle-watch', !!enabled),
+  moveIslandX: value => ipcRenderer.send('island:position-x', Number(value) || 0),
   activity: (type, data, options) => ipcRenderer.send('island:activity', type, data, options),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSetting: (key, value) => ipcRenderer.invoke('settings:set', key, value),
@@ -24,6 +25,8 @@ contextBridge.exposeInMainWorld('islandAPI', {
   setMuted: muted => ipcRenderer.invoke('volume:mute', muted),
   getBattery: () => ipcRenderer.invoke('battery:get'),
   getNetwork: () => ipcRenderer.invoke('network:get'),
+  statsStart: () => ipcRenderer.invoke('stats:start'),
+  statsStop: () => ipcRenderer.invoke('stats:stop'),
   openNetworkSettings: target => ipcRenderer.invoke('network:open', target),
   copyText: text => ipcRenderer.invoke('clipboard:write', text),
   quit: () => ipcRenderer.send('app:quit'),
